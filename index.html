@@ -1,0 +1,2443 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mes photos de famille</title>
+<!--
+  Prototype « Mes photos de famille » — un seul fichier, 100 % local.
+  Ouvrir ce fichier avec Google Chrome ou Microsoft Edge (double-clic).
+  Les données restent dans le navigateur (IndexedDB). Aucun envoi sur internet,
+  sauf la reconnaissance vocale si le navigateur ne sait pas la faire en local
+  (un message le demande explicitement avant).
+
+  Organisation du code (voir README.md) :
+    1. Utilitaires          5. Doublons
+    2. Stockage (IndexedDB) 6. Étiquettes (zones, glisser-déposer, geste)
+    3. État + navigation    7. Voix + dictionnaire
+    4. Import des photos    8. Galerie, sauvegarde, réglages
+-->
+<meta name="color-scheme" content="light">
+<!-- Thème de secours « Contraste élevé » (le premier style du prototype). Activé dans Réglages > Apparence. -->
+<style id="theme-classic" media="not all">
+:root{
+  --bg:#f6f3ea; --panel:#ffffff; --ink:#111; --muted:#3d3d3d; --line:#222;
+  --primary:#0b4fa8; --ok:#0a6b2b; --danger:#a1001b; --focus:#ffbf00;
+  --radius:14px;
+  font-size:20px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.35}
+button,input,textarea,select{font:inherit;color:inherit}
+:focus-visible{outline:5px solid var(--focus);outline-offset:2px}
+h1,h2,h3{margin:0}
+p{margin:.4rem 0}
+
+/* ---- Boutons ---- */
+.btn{min-height:3rem;padding:.45rem 1.1rem;border:3px solid var(--line);border-radius:var(--radius);background:#fff;color:var(--ink);
+  font-weight:700;font-size:1rem;display:inline-flex;align-items:center;justify-content:center;gap:.5rem;cursor:pointer;text-align:center}
+.btn:hover{background:#e9f0ff}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.primary{background:var(--primary);color:#fff;border-color:#062f66}
+.btn.primary:hover{background:#093f87}
+.btn.ok{background:var(--ok);color:#fff;border-color:#04401a}
+.btn.ok:hover{background:#08561f}
+.btn.danger{background:var(--danger);color:#fff;border-color:#5e0010}
+.btn.danger:hover{background:#82001a}
+.btn.big{min-height:4rem;font-size:1.15rem;padding:.6rem 1.4rem}
+.btn.small{min-height:2.4rem;font-size:.85rem;padding:.3rem .7rem;border-width:2px}
+.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
+.row.end{justify-content:flex-end;margin-top:1rem}
+.inp{width:100%;min-height:3rem;padding:.5rem .8rem;border:3px solid var(--line);border-radius:12px;background:#fff;font-size:1.05rem}
+textarea.inp{min-height:5rem;resize:vertical}
+.lbl{display:block;font-weight:700;margin:.8rem 0 .3rem}
+.muted{color:var(--muted)}
+.hint{font-size:.85rem;color:var(--muted)}
+
+/* ---- Écrans ---- */
+.screen{display:none;min-height:100vh}
+.screen.active{display:flex;flex-direction:column}
+header.bar{display:flex;gap:.6rem;align-items:center;padding:.5rem .8rem;background:#fff;border-bottom:3px solid var(--line);flex-wrap:wrap}
+header.bar h1{font-size:1.35rem;flex:1;min-width:10rem}
+.fontbtns{display:flex;gap:.3rem}
+main.pad{padding:1rem;max-width:80rem;width:100%;margin:0 auto}
+
+/* ---- Accueil ---- */
+.stats{font-size:1.1rem;margin:.3rem 0 1rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:1rem}
+.tile{display:flex;align-items:center;gap:1rem;text-align:left;min-height:7rem;padding:1rem 1.2rem;border:4px solid var(--line);border-radius:20px;background:#fff;cursor:pointer}
+.tile:hover{background:#e9f0ff}
+.tile .ico{font-size:2.8rem;line-height:1}
+.tile b{display:block;font-size:1.3rem}
+.tile span{font-size:.9rem;color:var(--muted)}
+.tile .num{display:inline-block;background:var(--danger);color:#fff;border-radius:999px;padding:0 .6rem;font-weight:800;margin-left:.3rem}
+.dropzone{margin-top:1.2rem;border:4px dashed #555;border-radius:20px;padding:1.2rem;text-align:center;font-size:1.05rem;background:#fffdf5}
+body.dragging .dropzone{background:#e8f7ec;border-color:var(--ok)}
+
+/* ---- Étiquetage ---- */
+#s-tag.active{height:100vh}
+.board{flex:1;min-height:0;display:grid;gap:.6rem;padding:.6rem;
+  grid-template-columns:minmax(10rem,14rem) 1fr minmax(10rem,14rem);
+  grid-template-rows:auto 1fr;grid-template-areas:"top top top" "left center right"}
+.zone{background:#fff;border:3px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0;min-width:0}
+.zone h2{font-size:.95rem;padding:.3rem .6rem;border-bottom:2px solid #bbb;display:flex;align-items:center;justify-content:space-between;gap:.4rem}
+.zone h2 .zname{cursor:pointer;text-decoration:underline dotted}
+.zone .list{overflow:auto;padding:.5rem;display:flex;gap:.5rem;flex:1;min-height:0}
+.zone.drop-hover{outline:5px dashed var(--primary)}
+#zone-top{grid-area:top} #zone-left{grid-area:left} #zone-right{grid-area:right}
+#zone-top .list{flex-direction:row;overflow-x:auto;overflow-y:hidden}
+#zone-left .list,#zone-right .list{flex-direction:column}
+.tag,.chip{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;min-height:3rem;padding:.4rem .95rem;border-radius:999px;color:#fff;
+  font-weight:700;font-size:1rem;border:3px solid rgba(0,0,0,.45);white-space:nowrap;display:inline-flex;align-items:center;gap:.4rem;flex-shrink:0;cursor:grab}
+.tag{touch-action:pan-y}
+#zone-top .tag{touch-action:pan-x}
+.tag.on{box-shadow:0 0 0 4px #fff,0 0 0 8px #111}
+.tag.on::before{content:"✓";font-size:1.1rem}
+.tag.lifted{transform:scale(1.08);box-shadow:0 10px 24px rgba(0,0,0,.45)}
+.tag.drop-target{outline:5px dashed #111;outline-offset:3px}
+.tag .uses{font-size:.75rem;opacity:.85;font-weight:600}
+.addtag{border:3px dashed #333;background:#fff;color:#111;border-radius:999px;min-height:3rem;padding:.3rem .9rem;font-weight:700;cursor:pointer;flex-shrink:0}
+.ghost{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;opacity:.95;box-shadow:0 12px 28px rgba(0,0,0,.5)}
+.center{grid-area:center;display:flex;flex-direction:column;gap:.5rem;min-height:0;overflow:auto;padding-right:.2rem}
+#stage{flex:1 0 42vh;min-height:16rem;background:#2b2b2b;border-radius:var(--radius);border:3px solid var(--line);position:relative;cursor:zoom-in;overflow:hidden}
+#stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+#stage.drop-hover{outline:7px dashed #1fae4b;outline-offset:-7px}
+#stage .dropmsg{position:absolute;inset:auto 0 0 0;background:rgba(10,107,43,.92);color:#fff;text-align:center;font-weight:800;padding:.5rem;display:none}
+#stage.drop-hover .dropmsg{display:block}
+.caption{font-size:.85rem;color:var(--muted);overflow-wrap:anywhere}
+.panel{background:#fff;border:3px solid var(--line);border-radius:var(--radius);padding:.5rem .6rem}
+#applied{min-height:3.8rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+#applied .empty{color:var(--muted)}
+.chip{touch-action:none;position:relative}
+.chip .x{background:rgba(0,0,0,.3);border:0;color:#fff;border-radius:999px;width:1.8rem;height:1.8rem;font-weight:900;cursor:pointer;margin-right:-.4rem}
+.chip.will-remove{background:var(--danger)!important}
+.chip.will-remove::after{content:"🗑 lâchez pour enlever";position:absolute;top:-1.6rem;left:0;background:#111;color:#fff;font-size:.75rem;padding:.1rem .4rem;border-radius:6px}
+.chip.pop{animation:pop .35s ease}
+@keyframes pop{0%{transform:scale(.4)}70%{transform:scale(1.15)}100%{transform:scale(1)}}
+.inputrow{display:flex;gap:.5rem;flex-wrap:wrap}
+.inputrow .inp{flex:1;min-width:12rem}
+#voiceBtn.listening{background:var(--danger);color:#fff;animation:pulse 1.1s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 10px rgba(161,0,27,.25)}}
+#voicePanel .heard{font-size:1.1rem}
+#voicePanel .unk{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin-top:.4rem;padding:.4rem;background:#fff6dc;border:2px solid #c99a00;border-radius:10px}
+
+@media (max-width:900px){
+  #s-tag.active{height:auto}
+  .board{grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "center" "left" "right"}
+  #zone-left .list,#zone-right .list{flex-direction:row;overflow-x:auto;overflow-y:hidden}
+  #zone-left .tag,#zone-right .tag{touch-action:pan-x}
+  .center{overflow:visible}
+}
+
+/* ---- Doublons ---- */
+.banner{background:#fff6dc;border:3px solid #c99a00;border-radius:var(--radius);padding:.8rem 1rem;display:flex;flex-wrap:wrap;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}
+.pairtitle{font-size:1.25rem;margin:.3rem 0 .8rem}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.side{background:#fff;border:4px solid var(--line);border-radius:var(--radius);padding:.6rem;display:flex;flex-direction:column;gap:.5rem}
+.side.best{border-color:var(--ok)}
+.side .img{height:46vh;min-height:14rem;background:#2b2b2b;border-radius:10px;position:relative;cursor:zoom-in}
+.side .img img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.facts{width:100%;border-collapse:collapse;font-size:.9rem}
+.facts td{padding:.2rem .3rem;border-bottom:1px solid #ddd;overflow-wrap:anywhere}
+.facts td:first-child{font-weight:700;width:7.5rem}
+.facts .diff{background:#fff1a8}
+.badge{display:inline-block;background:var(--ok);color:#fff;border-radius:999px;padding:.1rem .7rem;font-weight:800;font-size:.85rem}
+@media (max-width:700px){.pair{grid-template-columns:1fr}.side .img{height:34vh}}
+
+/* ---- Galerie ---- */
+.filters{display:flex;flex-wrap:wrap;gap:.5rem;margin:.6rem 0}
+.filters .btn[aria-pressed="true"]{background:var(--ink);color:#fff}
+.tagfilter{display:flex;gap:.4rem;overflow-x:auto;padding:.3rem 0 .6rem}
+.tagfilter .tag{cursor:pointer;min-height:2.6rem;font-size:.9rem;touch-action:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(11rem,1fr));gap:.8rem}
+.card{background:#fff;border:3px solid var(--line);border-radius:12px;padding:.4rem;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:.3rem}
+.card:hover{background:#e9f0ff}
+.card img{width:100%;aspect-ratio:1;object-fit:cover;background:#ccc;border-radius:8px}
+.card .nm{font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .dots{display:flex;flex-wrap:wrap;gap:.2rem}
+.card .dots i{font-style:normal;font-size:.7rem;color:#fff;border-radius:6px;padding:0 .3rem}
+
+/* ---- Divers ---- */
+dialog{border:4px solid #111;border-radius:18px;padding:1.2rem 1.4rem;max-width:min(42rem,94vw);width:100%;background:#fff;color:var(--ink);font-size:1rem}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog h2{font-size:1.35rem;margin-bottom:.5rem}
+.swatches{display:flex;flex-wrap:wrap;gap:.5rem}
+.sw{width:3rem;height:3rem;border-radius:999px;border:3px solid #111;cursor:pointer}
+.sw.sel{box-shadow:0 0 0 4px #fff,0 0 0 8px #111}
+.choices{display:flex;flex-direction:column;gap:.5rem;margin:.6rem 0}
+#toast{position:fixed;left:50%;bottom:1rem;transform:translateX(-50%);z-index:2000;background:#111;color:#fff;font-size:1.1rem;font-weight:600;
+  padding:.6rem .8rem .6rem 1.2rem;border-radius:16px;display:flex;align-items:center;gap:1rem;max-width:94vw;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#busy{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:3000;display:flex;align-items:center;justify-content:center}
+#busy .box{background:#fff;border:4px solid #111;border-radius:18px;padding:1.5rem;width:min(34rem,92vw);text-align:center;font-size:1.15rem}
+.progress{height:1.6rem;border:3px solid #111;border-radius:999px;overflow:hidden;margin-top:.8rem;background:#eee}
+.progress i{display:block;height:100%;background:var(--ok);width:0;transition:width .15s}
+#viewer{position:fixed;inset:0;background:#000;z-index:1500;overflow:auto}
+#viewer img{display:block;max-width:100vw;max-height:100vh;margin:auto;cursor:zoom-in}
+#viewer.zoomed img{max-width:none;max-height:none;cursor:zoom-out}
+#viewer .vbar{position:fixed;top:.8rem;right:.8rem;display:flex;gap:.5rem}
+.dictrow{display:flex;gap:.5rem;align-items:center;padding:.3rem 0;border-bottom:1px solid #ddd}
+.dictrow span{flex:1}
+section.card2{background:#fff;border:3px solid var(--line);border-radius:var(--radius);padding:1rem;margin-bottom:1rem}
+section.card2 h2{font-size:1.2rem;margin-bottom:.4rem}
+/* ajouts minimes pour les éléments apparus avec le thème élégant */
+.big-ic{font-size:2.4rem;display:block;color:var(--ok)}
+kbd{font-family:inherit;border:2px solid #222;border-radius:6px;padding:0 .3rem;background:#fff}
+.tile .txt{flex:1} .tile .go{font-size:1.4rem}
+.zoomhint{display:none}
+.eyebrow{font-weight:700}
+.searchwrap [class^="ic-"]{display:none}
+.themes{display:flex;gap:1rem;flex-wrap:wrap}
+.themecard{border:3px solid #222;border-radius:14px;padding:.8rem;background:#fff;display:flex;flex-direction:column;gap:.4rem;text-align:left;cursor:pointer;min-width:14rem}
+.themecard[aria-pressed="true"]{outline:5px solid var(--focus)}
+.themecard .pv{height:3rem;display:flex;gap:.3rem;align-items:center;padding:0 .5rem}
+.themecard .pv i{display:block;height:1.4rem;flex:1;border-radius:999px}
+</style>
+
+<!-- Thème par défaut « Élégant » : papier ivoire, encre bleu nuit, touches de bronze. -->
+<style id="theme-elegant">
+:root{
+  --bg:#f4f1eb; --surface:#ffffff; --surface-2:#faf8f4; --ink:#1d2730; --ink-2:#55616c; --line:#e4ddd2; --line-strong:#cbc2b4;
+  --primary:#2b4c6f; --primary-hover:#213c59; --primary-soft:#e7eef5;
+  --accent:#9a6a32; --accent-soft:#f5ecdf;
+  --ok:#2f6b4f; --ok-hover:#255640; --ok-soft:#e3efe8;
+  --danger:#9b2c2c; --danger-hover:#7f2222; --danger-soft:#f8e6e4;
+  --focus:#d99a2b; --radius:16px;
+  --shadow:0 1px 2px rgba(29,39,48,.05),0 4px 14px rgba(29,39,48,.06);
+  --shadow-hover:0 2px 4px rgba(29,39,48,.06),0 10px 28px rgba(29,39,48,.10);
+  --shadow-lg:0 20px 60px rgba(29,39,48,.25);
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-size:20px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.45;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button,input,textarea,select{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+h1,h2,h3{margin:0;font-family:var(--serif);font-weight:600;letter-spacing:.005em}
+p{margin:.45rem 0}
+kbd{font-family:var(--sans);font-size:.8em;padding:.05rem .4rem;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:6px;background:var(--surface-2);color:var(--ink-2)}
+
+/* ---- Boutons ---- */
+.btn{min-height:3rem;padding:.5rem 1.15rem;border:1.5px solid var(--line-strong);border-radius:12px;background:var(--surface);color:var(--ink);
+  font-weight:600;font-size:1rem;display:inline-flex;align-items:center;justify-content:center;gap:.55rem;cursor:pointer;text-align:center;
+  transition:background .15s,border-color .15s,box-shadow .15s,transform .06s;box-shadow:0 1px 1px rgba(29,39,48,.04)}
+.btn:hover{border-color:var(--primary);background:var(--surface-2)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.38;cursor:not-allowed}
+.btn:disabled:hover{border-color:var(--line-strong);background:var(--surface)}
+.btn.primary{background:var(--primary);color:#fff;border-color:transparent;box-shadow:0 2px 6px rgba(43,76,111,.25)}
+.btn.primary:hover{background:var(--primary-hover)}
+.btn.ok{background:var(--ok);color:#fff;border-color:transparent;box-shadow:0 2px 6px rgba(47,107,79,.25)}
+.btn.ok:hover{background:var(--ok-hover)}
+.btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+.btn.danger:hover{background:var(--danger-hover)}
+.btn.danger.small{background:var(--danger-soft);color:var(--danger)}
+.btn.danger.small:hover{background:#f1d3cf}
+.btn.big{min-height:3.8rem;font-size:1.1rem;padding:.6rem 1.4rem;border-radius:14px}
+.btn.small{min-height:2.5rem;font-size:.85rem;padding:.3rem .8rem;border-radius:10px}
+.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
+.row.end{justify-content:flex-end;margin-top:1.2rem}
+.inp{width:100%;min-height:3rem;padding:.55rem .9rem;border:1.5px solid var(--line-strong);border-radius:12px;background:var(--surface);font-size:1.05rem;transition:border-color .15s,box-shadow .15s}
+.inp:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 4px var(--primary-soft)}
+.inp::placeholder{color:#8b949c}
+textarea.inp{min-height:5rem;resize:vertical;line-height:1.45}
+.lbl{display:block;font-weight:600;margin:.9rem 0 .35rem}
+.muted{color:var(--ink-2)}
+.hint{font-size:.85rem;color:var(--ink-2)}
+.eyebrow{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2)}
+.big-ic{display:inline-flex;align-items:center;justify-content:center;width:3.6rem;height:3.6rem;border-radius:50%;background:var(--ok-soft);color:var(--ok);font-size:1.6rem;margin-bottom:.6rem}
+.big-ic.warn{background:var(--accent-soft);color:var(--accent)}
+.big-ic.info{background:var(--primary-soft);color:var(--primary)}
+
+/* ---- Écrans ---- */
+.screen{display:none;min-height:100vh}
+.screen.active{display:flex;flex-direction:column}
+header.bar{display:flex;gap:.6rem;align-items:center;padding:.6rem 1rem;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);flex-wrap:wrap;position:sticky;top:0;z-index:20}
+header.bar h1{font-size:1.4rem;flex:1;min-width:10rem;display:flex;align-items:center;gap:.6rem}
+header.bar h1 .logo{display:inline-flex;align-items:center;justify-content:center;width:2.3rem;height:2.3rem;border-radius:10px;background:var(--primary);color:#fff;font-size:1.05rem}
+.fontbtns{display:flex;gap:.3rem}
+main.pad{padding:1.4rem 1.2rem 2rem;max-width:78rem;width:100%;margin:0 auto}
+
+/* ---- Accueil ---- */
+.hero{margin:.4rem 0 1.4rem}
+.hero h2{font-size:2rem;line-height:1.2}
+.stats{font-size:1.05rem;margin:.4rem 0 0;color:var(--ink-2)}
+.stats b{color:var(--ink)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(18rem,1fr));gap:1rem}
+.tile{display:flex;align-items:center;gap:1.1rem;text-align:left;min-height:7rem;padding:1.1rem 1.2rem;border:1px solid var(--line);border-radius:20px;background:var(--surface);
+  cursor:pointer;box-shadow:var(--shadow);transition:box-shadow .2s,transform .2s,border-color .2s}
+.tile:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px);border-color:var(--line-strong)}
+.tile .ico{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:3.4rem;height:3.4rem;border-radius:16px;font-size:1.5rem;background:var(--primary-soft);color:var(--primary)}
+.tile:nth-child(2) .ico{background:var(--accent-soft);color:var(--accent)}
+.tile:nth-child(3) .ico{background:var(--ok-soft);color:var(--ok)}
+.tile:nth-child(4) .ico{background:#efe9f4;color:#5e4a82}
+.tile:nth-child(5) .ico{background:#e5f0f0;color:#1f6a6e}
+.tile:nth-child(6) .ico{background:#eceef0;color:#4a5562}
+.tile .txt{flex:1}
+.tile b{display:block;font-family:var(--serif);font-size:1.25rem;font-weight:600;margin-bottom:.15rem}
+.tile .txt>span{font-size:.88rem;color:var(--ink-2)}
+.tile .go{color:var(--line-strong);font-size:1.2rem;transition:color .2s,transform .2s}
+.tile:hover .go{color:var(--primary);transform:translateX(3px)}
+.tile .num{display:inline-block;background:var(--accent);color:#fff;border-radius:999px;padding:0 .55rem;font-family:var(--sans);font-size:.8rem;font-weight:700;margin-left:.3rem;vertical-align:.15em}
+.dropzone{margin-top:1.2rem;border:2px dashed var(--line-strong);border-radius:20px;padding:1.2rem;text-align:center;font-size:1rem;color:var(--ink-2);display:flex;align-items:center;justify-content:center;gap:.7rem;transition:background .2s,border-color .2s}
+.dropzone b{color:var(--ink)}
+body.dragging .dropzone{background:var(--ok-soft);border-color:var(--ok)}
+.trust{display:flex;align-items:center;gap:.5rem;color:var(--ink-2);font-size:.85rem;margin-top:1.6rem}
+.trust [class^="ic-"]{color:var(--ok)}
+
+/* ---- Étiquetage ---- */
+#s-tag.active{height:100vh}
+#s-tag header.bar{position:static}
+.board{flex:1;min-height:0;display:grid;gap:.75rem;padding:.75rem;
+  grid-template-columns:minmax(10rem,14rem) 1fr minmax(10rem,14rem);
+  grid-template-rows:auto 1fr;grid-template-areas:"top top top" "left center right"}
+.zone{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0;min-width:0;box-shadow:var(--shadow);transition:box-shadow .15s}
+.zone h2{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2);padding:.55rem .8rem .35rem;display:flex;align-items:center;justify-content:space-between;gap:.4rem}
+.zone h2 .zname{cursor:pointer;border-bottom:1px dotted var(--line-strong)}
+.zone h2 .zname:hover{color:var(--primary)}
+.zone h2 .hint{text-transform:none;letter-spacing:0;font-weight:500}
+.zone .list{overflow:auto;padding:.3rem .7rem .7rem;display:flex;gap:.5rem;flex:1;min-height:0;scrollbar-width:thin}
+.zone.drop-hover{box-shadow:0 0 0 3px var(--primary)}
+#zone-top{grid-area:top} #zone-left{grid-area:left} #zone-right{grid-area:right}
+#zone-top .list{flex-direction:row;overflow-x:auto;overflow-y:hidden}
+#zone-left .list,#zone-right .list{flex-direction:column;align-items:stretch}
+.tag,.chip{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;min-height:2.9rem;padding:.4rem 1rem;border-radius:999px;color:#fff;
+  font-weight:600;font-size:1rem;border:0;white-space:nowrap;display:inline-flex;align-items:center;gap:.45rem;flex-shrink:0;cursor:grab;
+  box-shadow:0 1px 2px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.12);transition:transform .12s,box-shadow .12s,filter .12s}
+.tag:hover{filter:brightness(1.08)}
+.tag{touch-action:pan-y}
+#zone-top .tag{touch-action:pan-x}
+.tag.on{box-shadow:0 0 0 3px var(--surface),0 0 0 5.5px var(--ink)}
+.tag.on::before{content:"";width:1.05em;height:1.05em;background:currentColor;-webkit-mask:var(--ic-check) center/contain no-repeat;mask:var(--ic-check) center/contain no-repeat}
+.tag.lifted{transform:scale(1.07);box-shadow:0 12px 26px rgba(0,0,0,.28)}
+.tag.drop-target{box-shadow:0 0 0 3px var(--surface),0 0 0 6px var(--accent)}
+.tag .uses{font-size:.72rem;font-weight:700;background:rgba(255,255,255,.22);border-radius:999px;padding:0 .45rem;line-height:1.5}
+.addtag{border:1.5px dashed var(--line-strong);background:transparent;color:var(--ink-2);border-radius:999px;min-height:2.9rem;padding:.3rem 1rem;font-weight:600;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;gap:.4rem;transition:color .15s,border-color .15s}
+.addtag:hover{color:var(--primary);border-color:var(--primary)}
+.ghost{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;opacity:.96;box-shadow:0 16px 34px rgba(0,0,0,.35)!important}
+.center{grid-area:center;display:flex;flex-direction:column;gap:.65rem;min-height:0;overflow:auto;padding:0 .15rem .2rem}
+#stage{flex:1 0 42vh;min-height:16rem;background:radial-gradient(ellipse at center,#2c343a 0%,#1a1f23 100%);border-radius:var(--radius);position:relative;cursor:zoom-in;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),var(--shadow)}
+#stage img{position:absolute;inset:.6rem;width:calc(100% - 1.2rem);height:calc(100% - 1.2rem);object-fit:contain;filter:drop-shadow(0 6px 18px rgba(0,0,0,.45))}
+#stage.drop-hover{box-shadow:inset 0 0 0 4px #6fbf8f}
+#stage .dropmsg{position:absolute;left:50%;bottom:1rem;transform:translateX(-50%);background:var(--ok);color:#fff;font-weight:600;padding:.45rem 1rem;border-radius:999px;display:none;box-shadow:var(--shadow-hover)}
+#stage.drop-hover .dropmsg{display:block}
+#stage .zoomhint{position:absolute;top:.7rem;right:.7rem;background:rgba(0,0,0,.45);color:#fff;border-radius:999px;padding:.25rem .7rem;font-size:.75rem;display:flex;gap:.35rem;align-items:center;opacity:.75}
+.caption{font-size:.82rem;color:var(--ink-2);overflow-wrap:anywhere;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:.7rem .85rem;box-shadow:var(--shadow)}
+.panel .eyebrow{margin-bottom:.35rem;display:block}
+#applied{min-height:3.4rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+#applied .empty{color:var(--ink-2);font-size:.92rem}
+.chip{touch-action:none;position:relative}
+.chip .x{background:rgba(255,255,255,.2);border:0;color:#fff;border-radius:999px;width:1.8rem;height:1.8rem;cursor:pointer;margin-right:-.45rem;display:inline-flex;align-items:center;justify-content:center;font-size:.8rem}
+.chip .x:hover{background:rgba(255,255,255,.35)}
+.chip.will-remove{background:var(--danger)!important}
+.chip.will-remove::after{content:"Lâchez pour enlever";position:absolute;top:-1.9rem;left:0;background:var(--ink);color:#fff;font-size:.75rem;font-weight:600;padding:.15rem .55rem;border-radius:8px;white-space:nowrap}
+.chip.pop{animation:pop .35s cubic-bezier(.2,.9,.3,1.3)}
+@keyframes pop{0%{transform:scale(.5);opacity:.3}100%{transform:scale(1);opacity:1}}
+.inputrow{display:flex;gap:.55rem;flex-wrap:wrap}
+.inputrow .inp{flex:1;min-width:12rem}
+#voiceBtn{background:var(--accent-soft);border-color:transparent;color:#6e4a1f}
+#voiceBtn:hover{background:#efdfc8}
+#voiceBtn.listening{background:var(--danger);color:#fff;animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(155,44,44,.4)}70%{box-shadow:0 0 0 14px rgba(155,44,44,0)}100%{box-shadow:0 0 0 0 rgba(155,44,44,0)}}
+#voicePanel{margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--line)}
+#voicePanel .heard{font-size:1.05rem}
+#voicePanel .unk{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;margin-top:.5rem;padding:.55rem .65rem;background:var(--accent-soft);border-radius:12px}
+#voicePanel .unk>span{color:#6e4a1f}
+
+@media (max-width:900px){
+  #s-tag.active{height:auto}
+  .board{grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "center" "left" "right"}
+  #zone-left .list,#zone-right .list{flex-direction:row;overflow-x:auto;overflow-y:hidden}
+  #zone-left .tag,#zone-right .tag{touch-action:pan-x}
+  .center{overflow:visible}
+  .hero h2{font-size:1.6rem}
+}
+
+/* ---- Doublons ---- */
+.banner{background:var(--accent-soft);border-radius:var(--radius);padding:.9rem 1.1rem;display:flex;flex-wrap:wrap;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1.2rem}
+.banner>span{color:#5a3d19}
+.banner>span [class^="ic-"]{color:var(--accent)}
+.pairtitle{font-size:1.4rem;margin:.2rem 0 .3rem}
+.pairtitle [class^="ic-"]{color:var(--accent)}
+.pairsub{margin:0 0 1rem;color:var(--ink-2)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:1.1rem}
+.side{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:.75rem;display:flex;flex-direction:column;gap:.6rem;box-shadow:var(--shadow);position:relative}
+.side.best{box-shadow:0 0 0 2px var(--ok),var(--shadow)}
+.side .img{height:46vh;min-height:14rem;background:radial-gradient(ellipse at center,#2c343a 0%,#1a1f23 100%);border-radius:14px;position:relative;cursor:zoom-in}
+.side .img img{position:absolute;inset:.5rem;width:calc(100% - 1rem);height:calc(100% - 1rem);object-fit:contain}
+.facts{width:100%;border-collapse:collapse;font-size:.88rem}
+.facts td{padding:.3rem .35rem;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.facts tr:last-child td{border-bottom:0}
+.facts td:first-child{color:var(--ink-2);width:7.5rem}
+.facts .diff{background:var(--accent-soft);border-radius:6px;font-weight:600}
+.badge{position:absolute;top:1.2rem;left:1.2rem;display:inline-flex;align-items:center;gap:.35rem;background:var(--ok);color:#fff;border-radius:999px;padding:.2rem .75rem;font-weight:600;font-size:.82rem;z-index:2;box-shadow:var(--shadow-hover)}
+@media (max-width:700px){.pair{grid-template-columns:1fr}.side .img{height:34vh}}
+
+/* ---- Galerie ---- */
+.searchwrap{position:relative}
+.searchwrap [class^="ic-"]{position:absolute;left:1rem;top:50%;transform:translateY(-50%);color:var(--ink-2)}
+.searchwrap .inp{padding-left:2.8rem}
+.filters{display:inline-flex;flex-wrap:wrap;gap:.25rem;margin:.9rem 0 .5rem;padding:.25rem;background:#ebe6dd;border-radius:14px}
+.filters .btn{border:0;background:transparent;box-shadow:none}
+.filters .btn:hover{background:rgba(255,255,255,.6)}
+.filters .btn[aria-pressed="true"]{background:var(--surface);color:var(--primary);box-shadow:var(--shadow)}
+.tagfilter{display:flex;gap:.45rem;overflow-x:auto;padding:.4rem .2rem .7rem;scrollbar-width:thin}
+.tagfilter .tag{cursor:pointer;min-height:2.5rem;font-size:.9rem;touch-action:auto;opacity:.82}
+.tagfilter .tag.on{opacity:1}
+#galInfo{color:var(--ink-2)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(11.5rem,1fr));gap:1rem}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:.5rem;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:.35rem;box-shadow:var(--shadow);transition:box-shadow .2s,transform .2s}
+.card:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px)}
+.card img{width:100%;aspect-ratio:1;object-fit:cover;background:#e8e3da;border-radius:11px}
+.card .nm{font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2);padding:0 .15rem}
+.card .dots{display:flex;flex-wrap:wrap;gap:.25rem;padding:0 .1rem}
+.card .dots i{font-style:normal;font-size:.68rem;font-weight:600;color:#fff;border-radius:999px;padding:.05rem .45rem}
+
+/* ---- Divers ---- */
+dialog{border:0;border-radius:24px;padding:1.6rem 1.7rem;max-width:min(42rem,94vw);width:100%;background:var(--surface);color:var(--ink);font-size:1rem;box-shadow:var(--shadow-lg)}
+dialog::backdrop{background:rgba(29,39,48,.45);backdrop-filter:blur(3px)}
+dialog h2{font-size:1.5rem;margin-bottom:.5rem}
+dialog h2 [class^="ic-"]{color:var(--accent)}
+dialog .btn.big{justify-content:flex-start}
+dialog .row.end .btn.big{justify-content:center}
+.swatches{display:flex;flex-wrap:wrap;gap:.6rem}
+.sw{width:2.8rem;height:2.8rem;border-radius:999px;border:0;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.1);transition:transform .12s}
+.sw:hover{transform:scale(1.08)}
+.sw.sel{box-shadow:0 0 0 3px var(--surface),0 0 0 5.5px var(--ink)}
+.choices{display:flex;flex-direction:column;gap:.55rem;margin:.8rem 0}
+#toast{position:fixed;left:50%;bottom:1.2rem;transform:translateX(-50%);z-index:2000;background:var(--ink);color:#fff;font-size:1.02rem;font-weight:500;
+  padding:.55rem .6rem .55rem 1.2rem;border-radius:16px;display:flex;align-items:center;gap:1rem;max-width:94vw;box-shadow:var(--shadow-lg);animation:toastin .25s ease}
+#toast .btn{background:rgba(255,255,255,.12);border-color:transparent;color:#fff;min-height:2.6rem}
+#toast .btn:hover{background:rgba(255,255,255,.22)}
+@keyframes toastin{from{opacity:0;transform:translate(-50%,10px)}}
+#busy{position:fixed;inset:0;background:rgba(29,39,48,.45);backdrop-filter:blur(3px);z-index:3000;display:flex;align-items:center;justify-content:center}
+#busy .box{background:var(--surface);border-radius:24px;padding:1.8rem;width:min(34rem,92vw);text-align:center;font-size:1.1rem;box-shadow:var(--shadow-lg)}
+.progress{height:.8rem;border-radius:999px;overflow:hidden;margin-top:1rem;background:#ebe6dd}
+.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--ok),#4f9a76);width:0;transition:width .15s;border-radius:999px}
+#viewer{position:fixed;inset:0;background:#111518;z-index:1500;overflow:auto}
+#viewer img{display:block;max-width:100vw;max-height:100vh;margin:auto;cursor:zoom-in}
+#viewer.zoomed img{max-width:none;max-height:none;cursor:zoom-out}
+#viewer .vbar{position:fixed;top:1rem;right:1rem;display:flex;gap:.5rem}
+#viewer .vbar .btn{background:rgba(255,255,255,.92);border-color:transparent}
+#viewer .vbar .btn.danger{background:var(--danger);color:#fff}
+.dictrow{display:flex;gap:.5rem;align-items:center;padding:.45rem 0;border-bottom:1px solid var(--line)}
+.dictrow span{flex:1}
+section.card2{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:1.2rem 1.3rem;margin-bottom:1rem;box-shadow:var(--shadow)}
+section.card2 h2{font-size:1.25rem;margin-bottom:.5rem}
+section.card2 h2 [class^="ic-"]{color:var(--accent)}
+.themes{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.8rem}
+.themecard{border:1.5px solid var(--line-strong);border-radius:16px;padding:.8rem;background:var(--surface);cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:.5rem}
+.themecard[aria-pressed="true"]{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
+.themecard .pv{height:3.6rem;border-radius:10px;display:flex;gap:.35rem;align-items:center;padding:0 .6rem}
+.themecard .pv i{display:block;height:1.5rem;border-radius:999px;flex:1}
+</style>
+<style id="common">
+/* Commun aux deux thèmes : état d'inscription, étiquettes trouvées dans les photos, choix d'accueil */
+.syncstate{display:flex;flex-wrap:wrap;gap:.25rem 1rem;justify-content:center;font-size:.85rem;color:var(--ink-2,var(--muted));margin:.2rem 0 .4rem}
+.syncstate>span{display:inline-flex;align-items:center;gap:.35rem}
+.syncstate .okc{color:var(--ok)} .syncstate .warn{color:var(--danger);font-weight:600}
+#syncBar{margin:.4rem 0 .8rem}
+.tag.ext{outline:2px dashed rgba(255,255,255,.9);outline-offset:-6px}
+.btn.choice{display:flex;align-items:flex-start;justify-content:flex-start;text-align:left;gap:.8rem;white-space:normal;line-height:1.35;padding:.9rem 1rem}
+.btn.choice>span{display:flex;flex-direction:column;gap:.25rem}
+.btn.choice .hint{font-weight:400}
+.btn.choice>[class^="ic-"]{margin-top:.15rem}
+.themecard[disabled]{opacity:.55;cursor:not-allowed}
+</style>
+</head>
+<body>
+
+<!-- ============ ÉCRAN : ACCUEIL ============ -->
+<section class="screen" id="s-home">
+  <header class="bar">
+    <h1><span class="logo"><i class=ic-book></i></span>Mes photos de famille</h1>
+    <div class="fontbtns"><button class="btn small" data-font="-1" aria-label="Texte plus petit">A−</button><button class="btn small" data-font="1" aria-label="Texte plus grand">A+</button></div>
+  </header>
+  <main class="pad">
+    <div class="hero">
+      <span class="eyebrow" id="heroHello">Bonjour</span>
+      <h2>Que voulez-vous faire aujourd'hui&nbsp;?</h2>
+      <p class="stats" id="homeStats"></p>
+    </div>
+    <div class="tiles">
+      <button class="tile" data-go="import"><span class="ico"><i class=ic-import></i></span><span class="txt"><b>Ajouter des photos</b><span>depuis une carte SD, une clé USB, un dossier…</span></span><span class="go"><i class=ic-chevron-right></i></span></button>
+      <button class="tile" data-go="dups"><span class="ico"><i class=ic-copy></i></span><span class="txt"><b>Trouver les doubles <span class="num" id="dupNum" hidden></span></b><span>comparer et enlever les photos en double</span></span><span class="go"><i class=ic-chevron-right></i></span></button>
+      <button class="tile" data-go="tag"><span class="ico"><i class=ic-tag></i></span><span class="txt"><b>Mettre des étiquettes</b><span>noms, lieux, type d'acte… à la voix ou à la main</span></span><span class="go"><i class=ic-chevron-right></i></span></button>
+      <button class="tile" data-go="gallery"><span class="ico"><i class=ic-search></i></span><span class="txt"><b>Retrouver une photo</b><span>chercher par nom, lieu, étiquette</span></span><span class="go"><i class=ic-chevron-right></i></span></button>
+      <button class="tile" data-go="backup"><span class="ico"><i class=ic-save></i></span><span class="txt"><b>Sauvegarder mon travail</b><span>garder une copie des étiquettes sur l'ordinateur</span></span><span class="go"><i class=ic-chevron-right></i></span></button>
+      <button class="tile" data-go="settings"><span class="ico"><i class=ic-sliders></i></span><span class="txt"><b>Réglages</b><span>apparence, taille du texte, mots corrigés</span></span><span class="go"><i class=ic-chevron-right></i></span></button>
+    </div>
+    <div class="dropzone" id="dropzone"><i class=ic-folder></i><span>Vous pouvez aussi <b>faire glisser un dossier ou des photos</b> sur cette fenêtre.</span></div>
+    <p class="row" id="demoRow" style="margin-top:1rem"><button class="btn" id="demoBtn"><i class=ic-sparkle></i>Essayer avec des photos d'exemple</button><span class="hint">Crée quelques faux actes (dont des doubles) pour découvrir l'application.</span></p>
+    <p class="trust hint"><i class=ic-lock></i>Vos photos restent sur cet ordinateur. Rien n'est envoyé sur internet.</p>
+  </main>
+</section>
+
+<!-- ============ ÉCRAN : ÉTIQUETTES ============ -->
+<section class="screen" id="s-tag">
+  <header class="bar">
+    <button class="btn" data-go="home"><i class=ic-arrow-left></i>Accueil</button>
+    <h1 id="tagCounter">Photo</h1>
+    <button class="btn big" id="prevBtn"><i class=ic-chevron-left></i>Précédente</button>
+    <button class="btn big primary" id="nextBtn">Suivante<i class=ic-chevron-right></i></button>
+    <button class="btn danger small" id="trashBtn" title="Mettre cette photo à la corbeille"><i class=ic-trash></i>Corbeille</button>
+  </header>
+  <div class="board" id="board">
+    <div class="zone" id="zone-top" data-zone="top"><h2><span class="zname" data-rename="top"></span><span class="hint">appui long = ranger</span></h2><div class="list"></div></div>
+    <div class="zone" id="zone-left" data-zone="left"><h2><span class="zname" data-rename="left"></span></h2><div class="list"></div></div>
+    <div class="center">
+      <div id="stage" title="Cliquer pour agrandir"><img id="stageImg" alt="Photo en cours"><span class="zoomhint"><i class=ic-zoom></i>agrandir</span><div class="dropmsg">Lâchez ici pour coller l'étiquette</div></div>
+      <div class="caption" id="stageCaption"></div>
+      <div class="syncstate" id="syncState"></div>
+      <div class="banner" id="syncBar" hidden></div>
+      <div class="panel">
+        <span class="eyebrow">Étiquettes de cette photo</span>
+        <div id="applied"></div>
+        <div class="hint" style="margin-top:.35rem">Pour en enlever une, <b>jetez-la</b> d'un geste vers le bord, ou touchez sa croix.</div>
+      </div>
+      <div class="panel">
+        <div class="inputrow">
+          <button class="btn big" id="voiceBtn"><i class=ic-mic></i>Parler</button>
+          <input class="inp" id="typeTag" list="tagList" placeholder="…ou écrire une étiquette puis Entrée" autocomplete="off">
+          <button class="btn primary" id="typeOk"><i class=ic-plus></i>Ajouter</button>
+        </div>
+        <datalist id="tagList"></datalist>
+        <div id="voicePanel" hidden></div>
+      </div>
+      <div class="panel">
+        <label class="lbl eyebrow" for="desc" style="margin-top:0">Description libre</label>
+        <textarea class="inp" id="desc" placeholder="Ex. : acte trouvé chez tante Jeanne, écriture difficile…"></textarea>
+      </div>
+    </div>
+    <div class="zone" id="zone-right" data-zone="right"><h2><span class="zname" data-rename="right"></span></h2><div class="list"></div></div>
+  </div>
+</section>
+
+<!-- ============ ÉCRAN : DOUBLONS ============ -->
+<section class="screen" id="s-dups">
+  <header class="bar">
+    <button class="btn" data-go="home"><i class=ic-arrow-left></i>Accueil</button>
+    <h1 id="dupCounter">Doubles</h1>
+    <button class="btn small" id="dupRescan"><i class=ic-refresh></i>Chercher à nouveau</button>
+  </header>
+  <main class="pad" id="dupMain"></main>
+</section>
+
+<!-- ============ ÉCRAN : GALERIE ============ -->
+<section class="screen" id="s-gallery">
+  <header class="bar">
+    <button class="btn" data-go="home"><i class=ic-arrow-left></i>Accueil</button>
+    <h1>Retrouver une photo</h1>
+  </header>
+  <main class="pad">
+    <div class="searchwrap"><i class=ic-search></i><input class="inp" id="galSearch" placeholder="Chercher un nom, un lieu, un mot de la description…"></div>
+    <div class="filters" id="galModes">
+      <button class="btn small" data-mode="all">Toutes</button>
+      <button class="btn small" data-mode="untagged">Sans étiquette</button>
+      <button class="btn small" data-mode="tagged">Avec étiquettes</button>
+      <button class="btn small" data-mode="trash"><i class=ic-trash></i>Corbeille</button>
+    </div>
+    <div class="tagfilter" id="galTags"></div>
+    <p id="galInfo" class="row"></p>
+    <div class="grid" id="galGrid"></div>
+  </main>
+</section>
+
+<!-- ============ ÉCRAN : RÉGLAGES ============ -->
+<section class="screen" id="s-settings">
+  <header class="bar">
+    <button class="btn" data-go="home"><i class=ic-arrow-left></i>Accueil</button>
+    <h1>Réglages</h1>
+  </header>
+  <main class="pad" id="setMain"></main>
+</section>
+
+<input type="file" id="inFiles" accept="image/*" multiple hidden>
+<input type="file" id="inDir" webkitdirectory multiple hidden>
+<input type="file" id="inBackup" accept=".json,application/json" hidden>
+<dialog id="dlg"></dialog>
+<div id="toast" hidden role="status"></div>
+<div id="busy" hidden><div class="box"><div id="busyText">Un instant…</div><div class="progress"><i id="busyBar"></i></div><p class="hint">Ne fermez pas la fenêtre.</p></div></div>
+<div id="viewer" hidden><img id="viewerImg" alt="Photo agrandie"><div class="vbar"><button class="btn big" id="vZoom"><i class=ic-zoom></i>Zoom</button><button class="btn big danger" id="vClose"><i class=ic-x></i>Fermer</button></div></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   1. UTILITAIRES
+   ===================================================================== */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/** minuscules, sans accents, sans ponctuation */
+const norm = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' Mo' : Math.round(b / 1024) + ' Ko';
+const fmtDate = t => t ? new Date(t).toLocaleString('fr-FR', {dateStyle: 'long', timeStyle: 'short'}) : '—';
+const dirOf = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '(dossier inconnu)';
+
+/** « Clé sonore » simplifiée pour le français : Dupont ≈ Dupond ≈ Dupon, Philippe ≈ Filipe */
+function soundKey(s) {
+  return norm(s).replace(/ /g, '')
+    .replace(/ph/g, 'f').replace(/qu/g, 'k').replace(/c(?=[eiy])/g, 's').replace(/c/g, 'k').replace(/gu(?=[ei])/g, 'g')
+    .replace(/y/g, 'i').replace(/eau/g, 'o').replace(/au/g, 'o').replace(/ai|ei/g, 'e').replace(/h/g, '')
+    .replace(/z/g, 's').replace(/w/g, 'v').replace(/(.)\1+/g, '$1').replace(/[stdxe]+$/, '');
+}
+function lev(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length; if (!m || !n) return m || n;
+  let prev = Array.from({length: n + 1}, (_, i) => i), cur = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    [prev, cur] = [cur, prev];
+  }
+  return prev[n];
+}
+async function sha256(buf) {
+  if (crypto.subtle) {
+    const d = await crypto.subtle.digest('SHA-256', buf);
+    return [...new Uint8Array(d)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+  // Repli si le navigateur refuse crypto.subtle (rare en local)
+  const u = new Uint8Array(buf); let h1 = 0x811c9dc5, h2 = 0x01000193 ^ u.length;
+  for (let i = 0; i < u.length; i++) { h1 = Math.imul(h1 ^ u[i], 16777619); h2 = Math.imul(h2 ^ u[i], 0x5bd1e995); h2 ^= h2 >>> 15; }
+  return 'fnv' + (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + u.length.toString(16);
+}
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name; document.body.append(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+
+/* ---- Boîtes de dialogue, messages, attente ---- */
+/** Ouvre une boîte ; se ferme quand on clique un élément [data-v]. Renvoie sa valeur (ou null). */
+function modal(html, setup) {
+  return new Promise(res => {
+    const d = $('#dlg');
+    d.innerHTML = html;
+    const close = v => { d.close(); res(v); };
+    d.onclick = e => { const b = e.target.closest('[data-v]'); if (b) close(b.dataset.v); };
+    d.oncancel = e => { e.preventDefault(); close(null); };
+    d.showModal();
+    setup?.(d, close);
+  });
+}
+const okBtn = (txt = "D'accord") => `<div class="row end"><button class="btn primary big" data-v="ok">${txt}</button></div>`;
+async function confirmBox(title, text, yes = 'Oui', no = 'Non', danger = false) {
+  return (await modal(`<h2>${title}</h2><p>${text}</p><div class="row end"><button class="btn big" data-v="no">${no}</button><button class="btn big ${danger ? 'danger' : 'ok'}" data-v="yes">${yes}</button></div>`)) === 'yes';
+}
+let toastTimer;
+function toast(msg, undo) {
+  const t = $('#toast');
+  t.innerHTML = `<span>${esc(msg)}</span>` + (undo ? '<button class="btn" id="undoBtn"><i class=ic-undo></i>Annuler</button>' : '');
+  t.hidden = false;
+  S.lastUndo = undo || null;
+  clearTimeout(toastTimer);
+  if (undo) $('#undoBtn').onclick = () => doUndo();
+  toastTimer = setTimeout(() => { t.hidden = true; }, undo ? 9000 : 4000);
+}
+async function doUndo() {
+  const u = S.lastUndo; S.lastUndo = null; $('#toast').hidden = true;
+  if (u) { await u(); toast('C\'est annulé.'); }
+}
+function busy(text, frac) {
+  const b = $('#busy');
+  if (text === false) { b.hidden = true; return; }
+  b.hidden = false; $('#busyText').textContent = text;
+  $('#busyBar').style.width = Math.round((frac || 0) * 100) + '%';
+}
+
+/* =====================================================================
+   2. STOCKAGE LOCAL (IndexedDB)
+   photos : métadonnées (petites)      blobs : images réduites + vignettes
+   tags   : étiquettes                 meta  : réglages, dictionnaire…
+   ===================================================================== */
+const DB = {
+  db: null,
+  open() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('mes-photos-de-famille', 1);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        d.createObjectStore('photos', {keyPath: 'id'});
+        d.createObjectStore('blobs', {keyPath: 'id'});
+        d.createObjectStore('tags', {keyPath: 'id'});
+        d.createObjectStore('meta', {keyPath: 'key'});
+      };
+      r.onsuccess = () => { this.db = r.result; res(); };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  _req(store, mode, fn) {
+    return new Promise((res, rej) => {
+      const tx = this.db.transaction(store, mode), rq = fn(tx.objectStore(store));
+      tx.oncomplete = () => res(rq?.result); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+    });
+  },
+  all: (s) => DB._req(s, 'readonly', o => o.getAll()),
+  get: (s, k) => DB._req(s, 'readonly', o => o.get(k)),
+  put: (s, v) => DB._req(s, 'readwrite', o => o.put(v)),
+  del: (s, k) => DB._req(s, 'readwrite', o => o.delete(k)),
+  putMany: (s, list) => DB._req(s, 'readwrite', o => { list.forEach(v => o.put(v)); }),
+  clear: (s) => DB._req(s, 'readwrite', o => o.clear()),
+};
+const saveMeta = (key, value) => DB.put('meta', {key, value});
+/* Contenu « humain » d'une photo (étiquettes + description). Quand il change, les initiales
+   du baliseur sont ajoutées et la photo sera réinscrite dans son fichier d'origine. */
+const contentSig = p => JSON.stringify([[...p.tags].sort(), p.description || '']);
+const syncSig = p => JSON.stringify([p.tags.map(id => { const t = S.tagById.get(id); return t ? (t.foreign ? 'ext' : t.zone) + '|' + t.label : ''; }).sort(), p.description || '', [...(p.baliseurs || [])].sort()]);
+function savePhoto(p) {
+  const c = contentSig(p);
+  if (p.knownSig !== undefined && c !== p.knownSig) {
+    const ini = S.settings.initials;
+    if (ini && !(p.baliseurs || []).includes(ini)) p.baliseurs = [...(p.baliseurs || []), ini];
+  }
+  p.knownSig = c; scheduleSync();
+  return DB.put('photos', p);
+}
+const saveTag = t => { scheduleSync(); return DB.put('tags', t); };
+
+/* =====================================================================
+   3. ÉTAT DE L'APPLICATION + NAVIGATION
+   ===================================================================== */
+/* Couleurs d'étiquettes : chaque étiquette garde un numéro de couleur (via la couleur « classique »),
+   affiché avec la teinte du thème choisi. */
+const COLORS = ['#1f4e9c', '#0a6b2b', '#a1001b', '#6a1b9a', '#9a4a00', '#00695c', '#37474f', '#ad1457'];
+const PALETTES = {
+  classic: COLORS,
+  //         encre bleue  forêt      bordeaux   prune      bronze     sarcelle   ardoise    vieux rose
+  elegant: ['#2e4a7d', '#2f6b4f', '#8c2f39', '#5e4a82', '#875a1e', '#1f6a6e', '#4a5562', '#96405f'],
+};
+const palette = () => PALETTES[S.settings.theme] || PALETTES.elegant;
+const colorOf = t => { const i = COLORS.indexOf(t.color); return i < 0 ? t.color : palette()[i]; };
+
+/* =====================================================================
+   ICÔNES — dessins vectoriels au trait (style « Lucide »), intégrés au fichier.
+   Utilisation dans le HTML : <i class=ic-nom></i>  (aucun téléchargement)
+   ===================================================================== */
+const ICONS = {
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M9 7h7"/>',
+  import: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  upload: '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/>',
+  tag: '<path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  zoom: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 1.8 1.8.7-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7z"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 1H8a2 2 0 0 1-2-1L5 6"/><path d="M10 11v6M14 11v6"/>',
+  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  'arrow-left': '<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3M8.5 21h7"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  pen: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>',
+  equal: '<path d="M5 9h14M5 15h14"/>',
+  similar: '<path d="M4 9.5c2.5-2.5 5-2.5 8 0s5.5 2.5 8 0M4 15.5c2.5-2.5 5-2.5 8 0s5.5 2.5 8 0"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><path d="M12 17v.01"/>',
+  alert: '<path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17v.01"/>',
+  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+  type: '<path d="M4 7V5h11v2M9.5 5v14M7 19h5"/><path d="M14 13v-1h7v1M17.5 12v7M16 19h3"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12M15 9v12"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  drive: '<path d="M22 12H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/><path d="M6 16h.01M10 16h.01"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.9 1.7-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H16a5 5 0 0 0 5-5c0-4-4-7-9-7z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7" r="1"/><circle cx="15.5" cy="7.5" r="1"/>',
+};
+(function installIcons() {
+  const url = n => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]}</svg>`)}")`;
+  const css = [':root{' + Object.keys(ICONS).map(n => `--ic-${n}:${url(n)};`).join('') + '}',
+    '[class^="ic-"]{display:inline-block;width:1.2em;height:1.2em;flex-shrink:0;vertical-align:-.22em;background-color:currentColor;-webkit-mask:var(--m) center/contain no-repeat;mask:var(--m) center/contain no-repeat;font-style:normal}',
+    'h2>[class^="ic-"],p>[class^="ic-"],.banner [class^="ic-"],.unk [class^="ic-"],.caption [class^="ic-"]{margin-right:.4em}',
+    ...Object.keys(ICONS).map(n => `.ic-${n}{--m:var(--ic-${n})}`)];
+  const st = document.createElement('style'); st.id = 'icons'; st.textContent = css.join('\n'); document.head.append(st);
+})();
+const I = n => `<i class=ic-${n}></i>`;
+
+function applyTheme() {
+  const classic = S.settings.theme === 'classic';
+  $('#theme-classic').media = classic ? 'all' : 'not all';
+  $('#theme-elegant').media = classic ? 'not all' : 'all';
+}
+const ZONES = ['top', 'left', 'right'];
+const ZONE_COLOR = {top: 0, left: 1, right: 3};
+const DEFAULT_SETTINGS = {theme: 'elegant', fontSize: 20,zoneNames: {top: 'Type de document', left: 'Noms de famille', right: 'Lieux'}, voice: null};
+const DEFAULT_TAGS = [
+  ['Naissance', 'top', 0], ['Baptême', 'top', 0], ['Mariage', 'top', 2], ['Décès', 'top', 6], ['Sépulture', 'top', 6],
+  ['Recensement', 'top', 5], ['Militaire', 'top', 4], ['Notaire', 'top', 4], ['Photo de famille', 'top', 7], ['Lettre', 'top', 7],
+  ['À revoir', 'top', 2], ['Illisible', 'top', 6],
+];
+
+const S = {
+  photos: [], byId: new Map(), byHash: new Map(), tags: [], tagById: new Map(),
+  dict: [], settings: {...DEFAULT_SETTINGS}, ignored: new Set(), roots: [], fsBroken: false,
+  screen: 'home', list: [], idx: 0, lastUndo: null,
+  gal: {q: '', mode: 'all', tags: new Set()}, dupPairs: null, dupIdx: 0,
+};
+function reindex() {
+  S.byId = new Map(S.photos.map(p => [p.id, p]));
+  S.byHash = new Map();
+  for (const p of S.photos) { if (!S.byHash.has(p.hash)) S.byHash.set(p.hash, []); S.byHash.get(p.hash).push(p); }
+  S.tags.sort((a, b) => a.order - b.order);
+  S.tagById = new Map(S.tags.map(t => [t.id, t]));
+}
+const live = () => S.photos.filter(p => !p.trashed);
+const zoneName = z => S.settings.zoneNames[z] || z;
+const tagsOfZone = z => S.tags.filter(t => t.zone === z).sort((a, b) => a.order - b.order);
+const byPath = (a, b) => a.path.localeCompare(b.path, 'fr', {numeric: true});
+
+function applyFont() { document.documentElement.style.fontSize = S.settings.fontSize + 'px'; }
+
+function go(name) {
+  if (name === 'import') return openImport();
+  if (name === 'backup') return openBackup();
+  if (name === 'tag') { S.list = live().sort(byPath).map(p => p.id); const i = S.list.findIndex(id => !S.byId.get(id).tags.length); S.idx = Math.max(0, i); }
+  if (name === 'dups') S.dupPairs = null;
+  if (name !== 'tag' && wantListen) voiceStop();
+  if (name !== 'tag' && S.screen === 'tag') { flushDesc(); syncNow(); }
+  S.screen = name;
+  $$('.screen').forEach(s => s.classList.toggle('active', s.id === 's-' + name));
+  window.scrollTo(0, 0);
+  ({home: renderHome, tag: renderTag, dups: renderDups, gallery: renderGallery, settings: renderSettings})[name]?.();
+}
+document.addEventListener('click', e => {
+  const g = e.target.closest('[data-go]'); if (g) go(g.dataset.go);
+  const f = e.target.closest('[data-font]');
+  if (f) { S.settings.fontSize = Math.min(32, Math.max(14, S.settings.fontSize + 2 * f.dataset.font)); applyFont(); saveMeta('settings', S.settings); }
+});
+
+function renderHome() {
+  const L = live(), tagged = L.filter(p => p.tags.length).length, trash = S.photos.length - L.length;
+  $('#homeStats').innerHTML = L.length
+    ? `<b>${L.length}</b> photo${L.length > 1 ? 's' : ''} · <b>${tagged}</b> avec des étiquettes · <b>${L.length - tagged}</b> à faire` + (trash ? ` · ${trash} dans la corbeille` : '')
+    : 'Pour commencer, ajoutez vos photos.';
+  const h = new Date().getHours();
+  $('#heroHello').textContent = h >= 18 || h < 5 ? 'Bonsoir' : 'Bonjour';
+  $('#demoRow').hidden = S.photos.length > 0;
+  const n = L.length < 3000 ? findDuplicates().length : 0;
+  $('#dupNum').hidden = !n; $('#dupNum').textContent = n;
+}
+
+/* =====================================================================
+   4. IMPORT DES PHOTOS
+   ===================================================================== */
+const IMG_RE = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
+const pathOf = f => f._path || f.webkitRelativePath || f.name;
+/** Inscription dans les fichiers possible ? (choix de l'utilisateur + navigateur compatible) */
+const canFS = () => 'showDirectoryPicker' in window;
+const filesMode = () => S.settings.writeMode === 'files' && canFS() && !S.fsBroken;
+
+async function openImport() {
+  const fs = filesMode();
+  const v = await modal(`<h2><i class=ic-import></i>Ajouter des photos</h2>
+    <p>Branchez la carte SD ou la clé USB, puis choisissez :</p>
+    <div class="choices">
+      <button class="btn big primary" data-v="dir"><i class=ic-folder></i>Tout un dossier (avec ses sous-dossiers)</button>
+      <button class="btn big" data-v="files"><i class=ic-image></i>Seulement quelques photos</button>
+    </div>
+    <p class="hint">${fs ? 'Les photos ne sont ni déplacées, ni effacées, ni recompressées. Les étiquettes que vous poserez seront inscrites à l\'intérieur des fichiers, avec vos initiales et la date d\'origine. Chrome vous demandera l\'autorisation.'
+      : 'Les photos d\'origine ne sont ni modifiées, ni déplacées, ni effacées.'} Les étiquettes déjà présentes dans les photos sont reprises.</p>
+    <div class="row end"><button class="btn" data-v="no">Fermer</button></div>`);
+  if (v === 'dir') fs ? importFromDir() : $('#inDir').click();
+  if (v === 'files') fs ? importFromPicker() : $('#inFiles').click();
+}
+$('#inFiles').onchange = e => { importFiles([...e.target.files]); e.target.value = ''; };
+$('#inDir').onchange = e => { importFiles([...e.target.files]); e.target.value = ''; };
+
+/* ---- Accès aux dossiers (Chrome / Edge) : nécessaire pour inscrire les étiquettes ---- */
+async function fsFailed(e, offerImport = true) {
+  console.warn('accès aux dossiers', e);
+  if (e.name === 'AbortError') return;
+  if (e.name === 'SecurityError' || e.name === 'TypeError') S.fsBroken = true;
+  const v = await modal(`<h2><i class=ic-alert></i>Accès au dossier impossible</h2>
+    <p>${e.name === 'NotAllowedError' ? 'L\'autorisation a été refusée.' : 'Ce navigateur n\'a pas permis d\'ouvrir le dossier pour y inscrire les étiquettes.'}</p>
+    ${offerImport ? `<p>Vous pouvez quand même ajouter les photos : les étiquettes resteront alors seulement dans l'application.</p>
+    <div class="row end"><button class="btn" data-v="no">Annuler</button><button class="btn big primary" data-v="dir"><i class=ic-folder></i>Ajouter sans inscrire</button></div>` : okBtn()}`);
+  if (v === 'dir') $('#inDir').click();
+}
+async function importFromDir() {
+  let dir; try { dir = await showDirectoryPicker({id: 'photos', mode: 'readwrite'}); } catch (e) { return fsFailed(e); }
+  importFromHandles([dir]);
+}
+async function importFromPicker() {
+  let hs; try { hs = await showOpenFilePicker({multiple: true, id: 'photos', types: [{description: 'Photos', accept: {'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif']}}]}); } catch (e) { return fsFailed(e); }
+  importFromHandles(hs);
+}
+async function addRoot(h) {
+  for (const r of S.roots) { try { if (await r.handle.isSameEntry(h)) return r; } catch {} }
+  const r = {id: uid(), handle: h, name: h.name}; S.roots.push(r); await saveMeta('roots', S.roots); return r;
+}
+async function walkDir(dir, prefix, imgs, xmps) {
+  try {
+    for await (const [name, h] of dir.entries()) {
+      if (h.kind === 'directory') { if (!/^(\.|\$recycle|system volume information)/i.test(name)) await walkDir(h, prefix + name + '/', imgs, xmps); }
+      else if (/\.xmp$/i.test(name)) xmps.set((prefix + name).toLowerCase(), h);
+      else if (IMG_RE.test(name)) imgs.push({h, rel: prefix + name});
+    }
+  } catch (e) { console.warn('dossier illisible', prefix, e); }
+}
+const sidecarOf = (map, rel) => map.get((rel + '.xmp').toLowerCase()) || map.get(rel.replace(/\.[^./]+$/, '').toLowerCase() + '.xmp');
+async function importFromHandles(handles) {
+  busy('Je regarde le contenu…', 0);
+  const items = [];
+  for (const h of handles) {
+    if (h.kind === 'directory') {
+      const r = await addRoot(h), imgs = [], xmps = new Map();
+      await walkDir(h, '', imgs, xmps);
+      for (const it of imgs) items.push({h: it.h, name: it.h.name, path: h.name + '/' + it.rel, loc: {root: r.id, rel: it.rel}, sidecar: sidecarOf(xmps, it.rel)});
+    } else if (IMG_RE.test(h.name)) items.push({h, name: h.name, path: h.name, loc: {fh: h}});
+  }
+  busy(false); importFiles(items);
+}
+
+/* Glisser un dossier sur la fenêtre */
+addEventListener('dragover', e => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); document.body.classList.add('dragging'); } });
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+addEventListener('drop', async e => {
+  if (!e.dataTransfer?.types?.includes('Files')) return;
+  e.preventDefault(); document.body.classList.remove('dragging');
+  if (filesMode() && window.DataTransferItem?.prototype.getAsFileSystemHandle) {
+    // Les poignées doivent être demandées tout de suite, pendant l'événement
+    const ps = [...e.dataTransfer.items].filter(i => i.kind === 'file').map(i => i.getAsFileSystemHandle());
+    const hs = (await Promise.all(ps)).filter(Boolean);
+    for (const h of hs) if (h.kind === 'directory') { try { await h.requestPermission({mode: 'readwrite'}); } catch {} }
+    return importFromHandles(hs);
+  }
+  const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  const files = [];
+  const walk = async (entry, path) => {
+    if (entry.isFile) { const f = await new Promise((r, j) => entry.file(r, j)); f._path = path + f.name; files.push(f); }
+    else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) { const batch = await new Promise((r, j) => reader.readEntries(r, j)); if (!batch.length) break; for (const c of batch) await walk(c, path + entry.name + '/'); }
+    }
+  };
+  if (entries.length) { busy('Je regarde le contenu…', 0); for (const en of entries) await walk(en, ''); busy(false); importFiles(files); }
+  else importFiles([...e.dataTransfer.files]);
+});
+
+async function decodeImage(file) {
+  try { return await createImageBitmap(file, {imageOrientation: 'from-image'}); }
+  catch {
+    const url = URL.createObjectURL(file);
+    try { const img = new Image(); img.src = url; await img.decode(); return img; }
+    finally { URL.revokeObjectURL(url); }
+  }
+}
+function canvasOf(src, maxSide) {
+  const w = src.width, h = src.height, k = Math.min(1, maxSide / Math.max(w, h));
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+  x.imageSmoothingQuality = 'high'; x.drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+const toBlob = (c, q = .85) => new Promise(r => c.toBlob(r, 'image/jpeg', q));
+/** Empreinte visuelle : image réduite à 32×32 en niveaux de gris (sert aux quasi-doublons) */
+function visualSignature(src) {
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const x = c.getContext('2d', {willReadFrequently: true}); x.imageSmoothingQuality = 'high';
+  x.drawImage(src, 0, 0, 32, 32);
+  const d = x.getImageData(0, 0, 32, 32).data; let s = '';
+  for (let i = 0; i < d.length; i += 4) s += String.fromCharCode(Math.round(.299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2]));
+  return btoa(s);
+}
+
+async function importFiles(all) {
+  // Fichiers compagnons .xmp choisis avec les photos (dossier entier sans accès en écriture)
+  const xmpFiles = new Map(all.filter(x => x instanceof File && /\.xmp$/i.test(x.name)).map(f => [pathOf(f).toLowerCase(), f]));
+  const files = all.map(x => x instanceof File ? {file: x, name: x.name, path: pathOf(x), demo: !!x._demo, sidecarFile: sidecarOf(xmpFiles, pathOf(x))} : x)
+    .filter(it => IMG_RE.test(it.name) || /^image\//.test(it.file?.type || ''));
+  if (!files.length) { await modal(`<h2>Aucune photo trouvée</h2><p>Je n'ai pas trouvé d'images (JPEG, PNG…) à cet endroit.</p>${okBtn()}`); return; }
+  navigator.storage?.persist?.();
+  const st = {added: 0, copies: 0, already: 0, bad: [], read: 0, newTags: 0, foreign: 0};
+  for (let i = 0; i < files.length; i++) {
+    busy(`Je range les photos… ${i + 1} sur ${files.length}`, i / files.length);
+    try { await importOne(files[i], st); } catch (err) { console.warn(err); st.bad.push(files[i].name); }
+  }
+  busy(false); reindex(); S.dupPairs = null; scheduleSync();
+  const v = await modal(`<span class="big-ic"><i class=ic-check></i></span><h2>C'est fait !</h2>
+    <p style="font-size:1.15rem"><b>${st.added}</b> photo${st.added > 1 ? 's' : ''} ajoutée${st.added > 1 ? 's' : ''}.</p>
+    ${st.copies ? `<p><i class=ic-copy></i><b>${st.copies}</b> étai${st.copies > 1 ? 'ent' : 't'} des copies identiques d'autres photos : je vous les montrerai dans « Trouver les doubles ».</p>` : ''}
+    ${st.read ? `<p><i class=ic-tag></i><b>${st.read}</b> photo${st.read > 1 ? 's avaient' : ' avait'} déjà des étiquettes ou une description : je les ai reprises${st.newTags ? ` (${st.newTags} nouvelle${st.newTags > 1 ? 's' : ''} étiquette${st.newTags > 1 ? 's' : ''})` : ''}.</p>` : ''}
+    ${st.foreign ? `<p class="hint">${st.foreign} étiquette${st.foreign > 1 ? 's venaient' : ' venait'} d'un autre logiciel : encadrée${st.foreign > 1 ? 's' : ''} de pointillés en haut, gardez le doigt appuyé dessus pour la ranger dans une zone.</p>` : ''}
+    ${st.already ? `<p>${st.already} photo(s) étaient déjà dans l'application (même fichier, même endroit) : ignorées.</p>` : ''}
+    ${st.bad.length ? `<p><i class=ic-alert></i>${st.bad.length} fichier(s) n'ont pas pu être lus (format inconnu, par exemple HEIC ou TIFF).</p>` : ''}
+    <div class="row end"><button class="btn big" data-v="home">Fermer</button><button class="btn big" data-v="dups"><i class=ic-copy></i>Trouver les doubles</button><button class="btn big primary" data-v="tag"><i class=ic-tag></i>Mettre des étiquettes</button></div>`);
+  go(v === 'dups' || v === 'tag' ? v : 'home');
+}
+
+async function importOne(it, st) {
+  const f = it.file || await it.h.getFile();
+  const u8 = new Uint8Array(await f.arrayBuffer());
+  const hash = await contentHash(u8), path = it.path;
+  const same = S.byHash.get(hash) || [];
+  // Déjà dans l'application ? (même endroit, même fichier, ou ancienne empreinte « fichier entier »)
+  let known = same.find(p => p.path === path);
+  if (!known && it.h) for (const q of same) if (q.loc && await sameFile(q, it.h)) { known = q; break; }
+  if (!known) { const leg = S.photos.find(p => p.path === path && !p.hash.startsWith('i:')); if (leg && leg.hash === await sha256(u8)) known = leg; }
+  if (known) {
+    known.hash = hash; if (it.loc && !known.loc) known.loc = it.loc;
+    await DB.put('photos', known); st.already++; return;
+  }
+  // Étiquettes déjà présentes dans la photo (ou dans son fichier compagnon .xmp)
+  let meta;
+  try { meta = await readMeta(u8); } catch (e) { console.warn(e); meta = finishMeta(emptyMeta()); }
+  try {
+    const sc = it.sidecarFile || (it.sidecar && await it.sidecar.getFile());
+    if (sc) { const m2 = emptyMeta(); addXmp(m2, await sc.text()); finishMeta(m2); mergeMeta(meta, m2); }
+  } catch (e) { console.warn('fichier compagnon', e); }
+  const twin = same[0];
+  let blobId, width, height, sig;
+  if (twin) { ({blobId, width, height, sig} = twin); st.copies++; } // copie exacte : on partage l'image déjà stockée
+  else {
+    const img = await decodeImage(f);
+    width = img.width; height = img.height;
+    const preview = await toBlob(canvasOf(img, 2200), .86), thumb = await toBlob(canvasOf(img, 360), .75);
+    sig = visualSignature(img); img.close?.();
+    blobId = uid(); await DB.put('blobs', {id: blobId, preview, thumb});
+  }
+  const tags = await tagsFromMeta(meta, st);
+  const p = {id: uid(), hash, blobId, name: f.name, path, size: f.size, lastModified: f.lastModified,
+    originalDate: meta.originalDate || f.lastModified, width, height, sig,
+    tags, description: meta.description, baliseurs: meta.baliseurs, seenKeywords: meta.leaves,
+    trashed: false, addedAt: Date.now(), copies: [], loc: it.loc || null, demo: !!it.demo};
+  p.knownSig = contentSig(p); p.syncedSig = syncSig(p);   // rien à réinscrire tant qu'on n'y touche pas
+  if (tags.length || p.description) st.read++;
+  await DB.put('photos', p);
+  S.photos.push(p); S.byId.set(p.id, p);
+  if (!S.byHash.has(hash)) S.byHash.set(hash, []); S.byHash.get(hash).push(p);
+  if (!twin) st.added++;
+}
+
+/* =====================================================================
+   4b. ÉTIQUETTES À L'INTÉRIEUR DES PHOTOS (métadonnées)
+   Lecture  : XMP (JPEG, PNG, WebP, fichier compagnon .xmp), IPTC et mots clés Windows (JPEG, WebP).
+   Écriture : XMP + IPTC dans les JPEG, XMP dans les PNG et WebP, fichier compagnon
+              « photo.ext.xmp » pour les autres formats (le fichier image n'est alors pas touché).
+   Les pixels ne sont jamais recompressés : seuls les blocs d'informations changent.
+   Chaque photo porte :
+     - ses étiquettes comme mots clés (dc:subject, IPTC Keywords) → visibles dans Windows, Lightroom…
+     - les catégories « Zone|Étiquette » (lr:hierarchicalSubject) → digiKam, Lightroom
+     - « Baliseur : XX » (initiales) et « Date d'origine : AAAA-MM-JJ HH:MM » (date du fichier
+       avant la première inscription, puisque toute écriture change la date du fichier)
+     - un espace propre à l'application (mpf:) pour savoir à coup sûr quelles étiquettes sont les siennes.
+   ===================================================================== */
+const NS = {rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#', dc: 'http://purl.org/dc/elements/1.1/', lr: 'http://ns.adobe.com/lightroom/1.0/',
+  ps: 'http://ns.adobe.com/photoshop/1.0/', xmp: 'http://ns.adobe.com/xap/1.0/', mpf: 'http://ns.mes-photos-de-famille.fr/1.0/'};
+const TE = new TextEncoder(), TD = new TextDecoder();
+const XMP_HDR = 'http://ns.adobe.com/xap/1.0/\0';
+const DATE_KW = /^\s*date d.origine\s*:\s*(\d{4})-(\d\d)-(\d\d)(?:[ T](\d\d):(\d\d))?/i;
+const sysKw = k => /^\s*(baliseur|date d.origine)\s*:/i.test(k);
+const sysHier = h => /^\s*(baliseur|date d.origine)\s*\|/i.test(h);
+const pad2 = n => String(n).padStart(2, '0');
+const startsWith = (u8, s, at = 0) => { if (at + s.length > u8.length) return false; for (let i = 0; i < s.length; i++) if (u8[at + i] !== s.charCodeAt(i)) return false; return true; };
+const ascii = (u8, a, n) => String.fromCharCode(...u8.subarray(a, a + n));
+function concat(parts) { const o = new Uint8Array(parts.reduce((s, p) => s + p.length, 0)); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o; }
+const uniqNorm = a => { const s = new Set(); return a.map(x => String(x ?? '').trim()).filter(x => x && !s.has(norm(x)) && s.add(norm(x))); };
+const fr = msg => Object.assign(new Error(msg), {fr: msg});
+function sniff(u8) {
+  if (u8[0] === 0xFF && u8[1] === 0xD8) return 'jpeg';
+  if (startsWith(u8, '\x89PNG\r\n\x1a\n')) return 'png';
+  if (startsWith(u8, 'RIFF') && startsWith(u8, 'WEBP', 8)) return 'webp';
+  return 'other';
+}
+
+/* ---- JPEG : découpage en blocs ---- */
+function jpegParse(u8) {
+  const segs = []; let i = 2;
+  if (u8[0] !== 0xFF || u8[1] !== 0xD8) throw new Error('jpeg');
+  while (i + 4 <= u8.length) {
+    if (u8[i] !== 0xFF) throw new Error('jpeg');
+    const m = u8[i + 1];
+    if (m === 0xFF) { i++; continue; }
+    if (m === 0xDA || m === 0xD9) return {segs, rest: u8.subarray(i)};
+    if ((m >= 0xD0 && m <= 0xD7) || m === 0x01) { i += 2; continue; }
+    const len = (u8[i + 2] << 8) | u8[i + 3];
+    if (len < 2 || i + 2 + len > u8.length) throw new Error('jpeg');
+    segs.push({m, raw: u8.subarray(i, i + 2 + len), data: u8.subarray(i + 4, i + 2 + len)});
+    i += 2 + len;
+  }
+  throw new Error('jpeg');
+}
+const isXmpSeg = s => s.m === 0xE1 && startsWith(s.data, XMP_HDR);
+const isExifSeg = s => s.m === 0xE1 && startsWith(s.data, 'Exif\0\0');
+const isPsSeg = s => s.m === 0xED && startsWith(s.data, 'Photoshop 3.0\0');
+function jpegSeg(m, data) {
+  if (data.length + 2 > 65535) throw fr('trop d\'informations pour ce fichier');
+  return concat([new Uint8Array([0xFF, m, (data.length + 2) >> 8, (data.length + 2) & 255]), data]);
+}
+
+/* ---- IPTC (bloc Photoshop APP13) ---- */
+function psResources(data) {
+  const out = []; let i = 14;
+  while (i + 12 <= data.length && startsWith(data, '8BIM', i)) {
+    const id = (data[i + 4] << 8) | data[i + 5]; let j = i + 6;
+    let nl = 1 + data[j]; if (nl % 2) nl++;
+    const name = data.subarray(j, j + nl); j += nl;
+    const size = ((data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | data[j + 3]) >>> 0; j += 4;
+    if (j + size > data.length) throw new Error('iptc');
+    out.push({id, name, body: data.subarray(j, j + size)});
+    i = j + size + (size % 2);
+  }
+  return out;
+}
+function psBuild(res) {
+  const parts = [TE.encode('Photoshop 3.0\0')];
+  for (const r of res) {
+    const h = new Uint8Array(6); h.set(TE.encode('8BIM')); h[4] = r.id >> 8; h[5] = r.id & 255;
+    const sz = new Uint8Array(4); new DataView(sz.buffer).setUint32(0, r.body.length);
+    parts.push(h, r.name, sz, r.body); if (r.body.length % 2) parts.push(new Uint8Array(1));
+  }
+  return concat(parts);
+}
+function iimParse(b) {
+  const ds = []; let i = 0;
+  while (i + 5 <= b.length && b[i] === 0x1C) {
+    const rec = b[i + 1], n = b[i + 2]; let size = (b[i + 3] << 8) | b[i + 4], j = i + 5;
+    if (size & 0x8000) { const k = size & 0x7fff; size = 0; for (let q = 0; q < k; q++) size = size * 256 + b[j + q]; j += k; }
+    ds.push({rec, n, data: b.subarray(j, j + size)}); i = j + size;
+  }
+  return ds;
+}
+function iimBuild(ds) {
+  return concat(ds.flatMap(d => { if (d.data.length > 32767) throw new Error('iptc'); return [new Uint8Array([0x1C, d.rec, d.n, d.data.length >> 8, d.data.length & 255]), d.data]; }));
+}
+function bytesMax(s, max) { let a = Array.from(s); while (TE.encode(a.join('')).length > max) a.pop(); return TE.encode(a.join('')); }
+function readIptc(m, data) {
+  try {
+    const r = psResources(data).find(r => r.id === 0x0404); if (!r) return;
+    const ds = iimParse(r.body);
+    const utf8 = ds.some(d => d.rec === 1 && d.n === 90 && d.data[0] === 0x1B && d.data[1] === 0x25 && d.data[2] === 0x47);
+    const dec = b => { if (utf8) return TD.decode(b); try { return new TextDecoder('utf-8', {fatal: true}).decode(b); } catch { return new TextDecoder('windows-1252').decode(b); } };
+    for (const d of ds) if (d.rec === 2) {
+      if (d.n === 25) m.kwI.push(dec(d.data));
+      if (d.n === 120 && !m.descI) m.descI = dec(d.data);
+      if (d.n === 122) m.writers.push(...dec(d.data).split(/\s*[,;]\s*/));
+    }
+  } catch (e) { console.warn('IPTC illisible', e); }
+}
+function iptcSeg(oldSeg, info) {
+  const res = oldSeg ? psResources(oldSeg.data) : [];
+  const old = res.find(r => r.id === 0x0404);
+  const ds = (old ? iimParse(old.body) : []).filter(d => !(d.rec === 1 && d.n === 90) && !(d.rec === 2 && [0, 25, 120, 122].includes(d.n)));
+  const v2 = old ? iimParse(old.body).find(d => d.rec === 2 && d.n === 0) : null;
+  const rec2 = [...ds.filter(d => d.rec === 2),
+    ...info.keywords.map(k => ({rec: 2, n: 25, data: bytesMax(k, 64)})),
+    ...(info.description ? [{rec: 2, n: 120, data: bytesMax(info.description, 2000)}] : []),
+    ...(info.writers.length ? [{rec: 2, n: 122, data: bytesMax(info.writers.join(', '), 32)}] : [])].sort((a, b) => a.n - b.n);
+  const body = iimBuild([...ds.filter(d => d.rec === 1), {rec: 1, n: 90, data: new Uint8Array([0x1B, 0x25, 0x47])},
+    v2 || {rec: 2, n: 0, data: new Uint8Array([0, 4])}, ...rec2, ...ds.filter(d => d.rec > 2)]);
+  const iptc = {id: 0x0404, name: new Uint8Array(2), body};
+  // L'empreinte IPTC (0x0425) devient fausse : on la retire, les logiciels se fient alors au XMP
+  const list = res.filter(r => r.id !== 0x0425).map(r => r.id === 0x0404 ? iptc : r);
+  if (!old) list.push(iptc);
+  return jpegSeg(0xED, psBuild(list));
+}
+
+/* ---- EXIF : mots clés et commentaire Windows (lecture seule) ---- */
+function readXP(m, tiff) {
+  try {
+    const le = tiff[0] === 0x49, dv = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength);
+    const ifd = dv.getUint32(4, le), n = dv.getUint16(ifd, le);
+    for (let k = 0; k < n; k++) {
+      const e = ifd + 2 + k * 12, tag = dv.getUint16(e, le);
+      if (tag !== 0x9C9E && tag !== 0x9C9C) continue;
+      const type = dv.getUint16(e + 2, le), size = dv.getUint32(e + 4, le) * (type === 3 ? 2 : 1);
+      const off = size <= 4 ? e + 8 : dv.getUint32(e + 8, le);
+      const s = new TextDecoder('utf-16le').decode(tiff.subarray(off, off + size)).replace(/\0+$/, '').trim();
+      if (tag === 0x9C9E) m.kwE.push(...s.split(';')); else m.descE = s;
+    }
+  } catch (e) { console.warn('EXIF illisible', e); }
+}
+
+/* ---- PNG ---- */
+function pngChunks(u8) {
+  const out = [], dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength); let i = 8;
+  while (i + 12 <= u8.length) {
+    const len = dv.getUint32(i), type = ascii(u8, i + 4, 4);
+    if (i + 12 + len > u8.length) throw new Error('png');
+    out.push({type, data: u8.subarray(i + 8, i + 8 + len), raw: u8.subarray(i, i + 12 + len)});
+    i += 12 + len; if (type === 'IEND') break;
+  }
+  return out;
+}
+const pngIsXmp = c => c.type === 'iTXt' && startsWith(c.data, 'XML:com.adobe.xmp\0');
+async function pngXmpText(c) {
+  const d = c.data; let i = 18; const comp = d[i]; i += 2;
+  while (d[i] !== 0 && i < d.length) i++; i++;
+  while (d[i] !== 0 && i < d.length) i++; i++;
+  const body = d.subarray(i);
+  return comp ? new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream('deflate'))).text() : TD.decode(body);
+}
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function pngChunk(type, data) {
+  const out = new Uint8Array(12 + data.length), dv = new DataView(out.buffer);
+  dv.setUint32(0, data.length); out.set(TE.encode(type), 4); out.set(data, 8);
+  dv.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length))); return out;
+}
+function pngWrite(u8, xmpStr) {
+  const parts = [u8.subarray(0, 8)];
+  for (const c of pngChunks(u8)) {
+    if (pngIsXmp(c)) continue;
+    parts.push(c.raw);
+    if (c.type === 'IHDR') parts.push(pngChunk('iTXt', concat([TE.encode('XML:com.adobe.xmp\0'), new Uint8Array(4), TE.encode(xmpStr)])));
+  }
+  return concat(parts);
+}
+
+/* ---- WebP ---- */
+function webpChunks(u8) {
+  const out = [], dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength); let i = 12;
+  while (i + 8 <= u8.length) {
+    const id = ascii(u8, i, 4), size = dv.getUint32(i + 4, true);
+    if (i + 8 + size > u8.length) throw new Error('webp');
+    out.push({id, data: u8.subarray(i + 8, i + 8 + size), raw: u8.subarray(i, Math.min(u8.length, i + 8 + size + (size & 1)))});
+    i += 8 + size + (size & 1);
+  }
+  return out;
+}
+function webpChunk(id, data) {
+  const out = new Uint8Array(8 + data.length + (data.length & 1));
+  out.set(TE.encode(id)); new DataView(out.buffer).setUint32(4, data.length, true); out.set(data, 8); return out;
+}
+function webpWrite(u8, xmpStr) {
+  const cs = webpChunks(u8).filter(c => c.id !== 'XMP ');
+  const x = cs.find(c => c.id === 'VP8X'); let head;
+  if (x) { const d = x.data.slice(); d[0] |= 0x04; head = webpChunk('VP8X', d); }
+  else {   // WebP « simple » : il faut ajouter l'en-tête étendu VP8X (taille de l'image + drapeau XMP)
+    const img = cs.find(c => c.id === 'VP8 ' || c.id === 'VP8L'); if (!img) throw new Error('webp');
+    const b = img.data; let w, h, alpha = 0;
+    if (img.id === 'VP8L') { const bits = (b[1] | b[2] << 8 | b[3] << 16 | b[4] << 24) >>> 0; w = (bits & 0x3fff) + 1; h = ((bits >>> 14) & 0x3fff) + 1; alpha = (bits >>> 28) & 1; }
+    else { w = (b[6] | b[7] << 8) & 0x3fff; h = (b[8] | b[9] << 8) & 0x3fff; }
+    const d = new Uint8Array(10); d[0] = 0x04 | (alpha ? 0x10 : 0);
+    [w - 1, h - 1].forEach((v, k) => { d[4 + 3 * k] = v & 255; d[5 + 3 * k] = (v >> 8) & 255; d[6 + 3 * k] = (v >> 16) & 255; });
+    head = webpChunk('VP8X', d);
+  }
+  const out = concat([TE.encode('RIFF'), new Uint8Array(4), TE.encode('WEBP'), head, ...cs.filter(c => c.id !== 'VP8X').map(c => c.raw), webpChunk('XMP ', TE.encode(xmpStr))]);
+  new DataView(out.buffer).setUint32(4, out.length - 8, true);
+  return out;
+}
+
+/** Empreinte de l'IMAGE seule (sans les informations) : une photo reste la même photo après qu'on y a inscrit des étiquettes */
+async function contentHash(u8) {
+  try {
+    const f = sniff(u8);
+    if (f === 'jpeg') { const {segs, rest} = jpegParse(u8); return 'i:' + await sha256(concat([...segs.filter(s => !(s.m >= 0xE0 && s.m <= 0xEF) && s.m !== 0xFE).map(s => s.raw), rest])); }
+    if (f === 'png') return 'i:' + await sha256(concat(pngChunks(u8).filter(c => !['tEXt', 'zTXt', 'iTXt', 'tIME', 'eXIf'].includes(c.type)).map(c => c.raw)));
+    if (f === 'webp') return 'i:' + await sha256(concat(webpChunks(u8).filter(c => !['VP8X', 'EXIF', 'XMP '].includes(c.id)).flatMap(c => [TE.encode(c.id), c.data])));
+  } catch (e) { console.warn('empreinte', e); }
+  return sha256(u8);
+}
+
+/* ---- XMP : lecture et écriture (en conservant tout ce que d'autres logiciels y ont mis) ---- */
+function xmpDoc(str) {
+  const a = str.search(/<x:x[am]pmeta[\s>]|<rdf:RDF[\s>]/); if (a < 0) throw new Error('xmp');
+  const end = ['</x:xmpmeta>', '</x:xapmeta>', '</rdf:RDF>'].find(t => str.includes(t));
+  const b = str.lastIndexOf(end); if (b < a) throw new Error('xmp');
+  const doc = new DOMParser().parseFromString(str.slice(a, b + end.length), 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length || !doc.getElementsByTagNameNS(NS.rdf, 'RDF').length) throw new Error('xmp');
+  return doc;
+}
+function xmpProps(doc) {
+  const descs = [...doc.getElementsByTagNameNS(NS.rdf, 'Description')];
+  const list = (ns, l) => {
+    const out = [];
+    for (const el of doc.getElementsByTagNameNS(ns, l)) {
+      const lis = el.getElementsByTagNameNS(NS.rdf, 'li');
+      if (lis.length) for (const li of lis) out.push(li.textContent.trim()); else out.push(...el.textContent.split(/[,;]/));
+    }
+    for (const d of descs) { const a = d.getAttributeNS(ns, l); if (a) out.push(...a.split(/[,;]/)); }
+    return out.map(s => s.trim()).filter(Boolean);
+  };
+  const simple = (ns, l) => {
+    for (const d of descs) { const a = d.getAttributeNS(ns, l); if (a) return a.trim(); }
+    const el = doc.getElementsByTagNameNS(ns, l)[0]; if (!el) return '';
+    const lis = [...el.getElementsByTagNameNS(NS.rdf, 'li')];
+    return (lis.length ? (lis.find(li => li.getAttribute('xml:lang') === 'x-default') || lis[0]).textContent : el.textContent).trim();
+  };
+  return {keywords: list(NS.dc, 'subject'), hier: list(NS.lr, 'hierarchicalSubject'), description: simple(NS.dc, 'description'),
+    writer: simple(NS.ps, 'CaptionWriter'), mpfTags: list(NS.mpf, 'Tags'), baliseurs: list(NS.mpf, 'Baliseurs'), od: simple(NS.mpf, 'OriginalFileDate')};
+}
+const emptyMeta = () => ({keywords: [], kwI: [], kwE: [], hier: [], descX: '', descI: '', descE: '', writers: [], mpfTags: [], baliseurs: [], odStr: '', xmp: null, xmpBroken: false, unreadable: false});
+function addXmp(m, str) {
+  try {
+    const x = xmpProps(xmpDoc(str));
+    if (m.xmp === null) m.xmp = str;
+    m.keywords.push(...x.keywords); m.hier.push(...x.hier); m.mpfTags.push(...x.mpfTags); m.baliseurs.push(...x.baliseurs);
+    if (x.writer) m.writers.push(...x.writer.split(/\s*[,;]\s*/));
+    if (!m.descX) m.descX = x.description;
+    if (!m.odStr) m.odStr = x.od;
+  } catch (e) { console.warn('XMP illisible', e); m.xmpBroken = true; }
+}
+function finishMeta(m) {
+  // Priorité au XMP (norme récente) ; IPTC puis mots clés Windows seulement s'il n'y a rien d'autre
+  m.keywords = uniqNorm(m.keywords.length ? m.keywords : m.kwI.length ? m.kwI : m.kwE);
+  m.hier = [...new Set(m.hier)]; m.mpfTags = [...new Set(m.mpfTags)];
+  m.description = (m.descX || m.descI || m.descE || '').trim();
+  for (const k of m.keywords) {
+    const b = k.match(/^\s*baliseur\s*:\s*(.+)$/i); if (b) m.baliseurs.push(b[1]);
+    const d = k.match(DATE_KW); if (d && !m.odStr) m.odStr = `${d[1]}-${d[2]}-${d[3]}T${d[4] || '00'}:${d[5] || '00'}`;
+  }
+  m.baliseurs = uniqNorm([...m.baliseurs, ...m.writers]);
+  m.originalDate = Date.parse(m.odStr) || 0;
+  m.leaves = uniqNorm([...m.keywords.filter(k => !sysKw(k)), ...m.hier.filter(h => !sysHier(h)).map(h => h.split('|').pop()), ...m.mpfTags.map(e => e.slice(e.indexOf('|') + 1))]);
+  return m;
+}
+function mergeMeta(m, o) {
+  m.keywords = uniqNorm([...m.keywords, ...o.keywords]); m.hier = [...new Set([...m.hier, ...o.hier])];
+  m.mpfTags = [...new Set([...m.mpfTags, ...o.mpfTags])]; m.baliseurs = uniqNorm([...m.baliseurs, ...o.baliseurs]);
+  m.leaves = uniqNorm([...m.leaves, ...o.leaves]);
+  if (!m.description) m.description = o.description;
+  if (!m.originalDate) m.originalDate = o.originalDate;
+}
+async function readMeta(u8) {
+  const m = emptyMeta();
+  try {
+    const fmt = sniff(u8);
+    if (fmt === 'jpeg') for (const s of jpegParse(u8).segs) {
+      if (isXmpSeg(s)) addXmp(m, TD.decode(s.data.subarray(XMP_HDR.length)));
+      else if (isPsSeg(s)) readIptc(m, s.data);
+      else if (isExifSeg(s)) readXP(m, s.data.subarray(6));
+    }
+    if (fmt === 'png') for (const c of pngChunks(u8)) { if (pngIsXmp(c)) addXmp(m, await pngXmpText(c)); }
+    if (fmt === 'webp') for (const c of webpChunks(u8)) {
+      if (c.id === 'XMP ') addXmp(m, TD.decode(c.data));
+      if (c.id === 'EXIF') readXP(m, startsWith(c.data, 'Exif\0\0') ? c.data.subarray(6) : c.data);
+    }
+  } catch (e) { console.warn('informations illisibles', e); m.unreadable = true; }
+  return finishMeta(m);
+}
+const XMLNS = 'http://www.w3.org/2000/xmlns/';
+function xmpBuild(oldStr, info, packet = true) {
+  const doc = oldStr ? xmpDoc(oldStr)
+    : new DOMParser().parseFromString(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="${NS.rdf}"/></x:xmpmeta>`, 'application/xml');
+  const rdf = doc.getElementsByTagNameNS(NS.rdf, 'RDF')[0];
+  const descs = [...rdf.children].filter(e => e.namespaceURI === NS.rdf && e.localName === 'Description');
+  const MINE = [[NS.dc, 'subject'], [NS.dc, 'description'], [NS.lr, 'hierarchicalSubject'], [NS.ps, 'CaptionWriter'],
+    [NS.mpf, 'Tags'], [NS.mpf, 'Baliseurs'], [NS.mpf, 'OriginalFileDate'], [NS.xmp, 'MetadataDate']];
+  for (const d of descs) for (const [ns, l] of MINE) { d.removeAttributeNS(ns, l); [...d.children].filter(c => c.namespaceURI === ns && c.localName === l).forEach(c => c.remove()); }
+  let d = descs[0];
+  if (!d) { d = doc.createElementNS(NS.rdf, 'rdf:Description'); d.setAttributeNS(NS.rdf, 'rdf:about', ''); rdf.append(d); }
+  for (const [p, ns] of [['dc', NS.dc], ['lr', NS.lr], ['photoshop', NS.ps], ['xmp', NS.xmp], ['mpf', NS.mpf]])
+    if (!d.lookupNamespaceURI(p)) d.setAttributeNS(XMLNS, 'xmlns:' + p, ns);
+  const el = (ns, q, kids = []) => { const e = doc.createElementNS(ns, q); e.append(...kids); return e; };
+  const txt = (ns, q, s) => { const e = el(ns, q); e.textContent = s; return e; };
+  const bag = (ns, q, items) => el(ns, q, [el(NS.rdf, 'rdf:Bag', items.map(s => txt(NS.rdf, 'rdf:li', s)))]);
+  if (info.keywords.length) d.append(bag(NS.dc, 'dc:subject', info.keywords));
+  if (info.description) { const li = txt(NS.rdf, 'rdf:li', info.description); li.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:lang', 'x-default'); d.append(el(NS.dc, 'dc:description', [el(NS.rdf, 'rdf:Alt', [li])])); }
+  if (info.hier.length) d.append(bag(NS.lr, 'lr:hierarchicalSubject', info.hier));
+  if (info.writers.length) d.append(txt(NS.ps, 'photoshop:CaptionWriter', info.writers.join(', ')));
+  if (info.mpfTags.length) d.append(bag(NS.mpf, 'mpf:Tags', info.mpfTags));
+  if (info.writers.length) d.append(bag(NS.mpf, 'mpf:Baliseurs', info.writers));
+  d.append(txt(NS.mpf, 'mpf:OriginalFileDate', info.originalISO), txt(NS.xmp, 'xmp:MetadataDate', new Date().toISOString()));
+  let xml = new XMLSerializer().serializeToString(doc.documentElement);
+  if (doc.documentElement.localName === 'RDF') xml = `<x:xmpmeta xmlns:x="adobe:ns:meta/">${xml}</x:xmpmeta>`;
+  return packet ? `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>\n${xml}\n${' '.repeat(1500)}\n<?xpacket end="w"?>` : `<?xml version="1.0" encoding="UTF-8"?>\n${xml}\n`;
+}
+function jpegWrite(u8, xmpStr, info) {
+  const {segs, rest} = jpegParse(u8);
+  const xmpSeg = jpegSeg(0xE1, concat([TE.encode(XMP_HDR), TE.encode(xmpStr)]));
+  const psSeg = iptcSeg(segs.find(isPsSeg), info);
+  const kept = segs.filter(s => !isXmpSeg(s) && !isPsSeg(s));
+  let at = 0; while (at < kept.length && (kept[at].m === 0xE0 || isExifSeg(kept[at]))) at++;   // après JFIF / EXIF
+  return concat([u8.subarray(0, 2), ...kept.slice(0, at).map(s => s.raw), xmpSeg, psSeg, ...kept.slice(at).map(s => s.raw), rest]);
+}
+
+/* ---- Ce que l'application inscrit pour une photo ---- */
+function buildInfo(p) {
+  const tags = p.tags.map(id => S.tagById.get(id)).filter(Boolean);
+  const writers = [...(p.baliseurs || [])];
+  const od = new Date(p.originalDate || p.lastModified);
+  const odTxt = `${od.getFullYear()}-${pad2(od.getMonth() + 1)}-${pad2(od.getDate())} ${pad2(od.getHours())}:${pad2(od.getMinutes())}`;
+  return {
+    keywords: [...tags.map(t => t.label), ...writers.map(w => 'Baliseur : ' + w), `Date d'origine : ${odTxt}`],
+    hier: [...tags.filter(t => !t.foreign).map(t => zoneName(t.zone) + '|' + t.label), ...writers.map(w => 'Baliseur|' + w), `Date d'origine|${odTxt}`],
+    mpfTags: tags.map(t => (t.foreign ? 'ext' : t.zone) + '|' + t.label),
+    description: (p.description || '').trim(), writers, originalISO: od.toISOString(),
+  };
+}
+/** Garde les mots clés posés par d'autres logiciels APRÈS l'ajout dans l'application (ceux d'avant sont devenus des étiquettes) */
+function mergeInfo(info, old, p) {
+  const managed = new Set([...old.mpfTags.map(e => e.slice(e.indexOf('|') + 1)), ...(p.seenKeywords || []), ...info.keywords].map(norm));
+  info.keywords = uniqNorm([...info.keywords, ...old.keywords.filter(k => !sysKw(k) && !managed.has(norm(k)))]);
+  info.hier = [...new Set([...info.hier, ...old.hier.filter(h => !sysHier(h) && !managed.has(norm(h.split('|').pop())))])];
+  return info;
+}
+
+/* ---- Retrouver le fichier d'origine ---- */
+async function resolveLoc(p) {
+  if (!p.loc) throw fr('photo pas reliée à son fichier');
+  if (p.loc.fh) return {fh: p.loc.fh, dir: null};
+  const r = S.roots.find(r => r.id === p.loc.root); if (!r) throw fr('dossier d\'origine inconnu');
+  const parts = p.loc.rel.split('/'), name = parts.pop(); let dir = r.handle;
+  for (const s of parts) dir = await dir.getDirectoryHandle(s);
+  return {fh: await dir.getFileHandle(name), dir};
+}
+const permOwner = p => p.loc?.fh || S.roots.find(r => r.id === p.loc?.root)?.handle || null;
+async function hasPerm(h, ask) {
+  const o = {mode: 'readwrite'};
+  try { if (await h.queryPermission(o) === 'granted') return true; return ask ? (await h.requestPermission(o)) === 'granted' : false; }
+  catch (e) { console.warn('autorisation', e); return false; }
+}
+async function sameFile(p, h) { try { return await (await resolveLoc(p)).fh.isSameEntry(h); } catch { return false; } }
+function errText(e) {
+  return e.fr || ({NotFoundError: 'fichier introuvable (déplacé ou renommé ?)', NotAllowedError: 'autorisation refusée',
+    NoModificationAllowedError: 'fichier protégé contre l\'écriture (carte SD verrouillée ?)', InvalidStateError: 'le fichier a changé pendant l\'écriture',
+    QuotaExceededError: 'disque plein', NotReadableError: 'fichier illisible (ouvert dans un autre logiciel ?)'})[e.name] || 'erreur inattendue';
+}
+async function writeStream(fh, data) {
+  const w = await fh.createWritable();   // Chrome écrit dans un fichier temporaire puis remplace l'original d'un coup
+  try { await w.write(data); await w.close(); } catch (e) { try { await w.abort(); } catch {} throw e; }
+}
+
+/** Inscrit les étiquettes dans le fichier d'origine, après vérification complète */
+async function writeTags(p) {
+  const loc = await resolveLoc(p);
+  const file = await loc.fh.getFile();
+  const u8 = new Uint8Array(await file.arrayBuffer());
+  const fmt = sniff(u8);
+  if (fmt === 'other') return writeSidecar(p, loc, file);
+  if (await contentHash(u8) !== p.hash) throw fr('cette photo a été modifiée par un autre logiciel depuis son ajout');
+  const old = await readMeta(u8);
+  if (old.xmpBroken || old.unreadable) throw fr('les informations de ce fichier sont abîmées : je préfère ne pas y toucher');
+  if (old.originalDate && !p.originalDate) p.originalDate = old.originalDate;
+  const info = mergeInfo(buildInfo(p), old, p);
+  const xmp = xmpBuild(old.xmp, info);
+  const out = fmt === 'jpeg' ? jpegWrite(u8, xmp, info) : fmt === 'png' ? pngWrite(u8, xmp) : webpWrite(u8, xmp);
+  // Vérification AVANT d'écrire : même image, et les étiquettes se relisent
+  const back = await readMeta(out);
+  if (await contentHash(out) !== p.hash || back.unreadable || back.xmpBroken || !info.keywords.every(k => back.keywords.some(b => norm(b) === norm(k))))
+    throw fr('la vérification a échoué, la photo n\'a pas été modifiée');
+  await writeStream(loc.fh, out);
+}
+/** Formats qu'on ne modifie pas (GIF, BMP, AVIF…) : fichier compagnon « photo.ext.xmp » à côté */
+async function writeSidecar(p, loc, file) {
+  if (!loc.dir) throw fr('pour ce format, ajoutez le dossier entier plutôt que la photo seule');
+  const name = file.name + '.xmp';
+  let oldStr = null;
+  try { oldStr = await (await (await loc.dir.getFileHandle(name)).getFile()).text(); } catch {}
+  const old = emptyMeta(); if (oldStr) addXmp(old, oldStr); finishMeta(old);
+  if (old.xmpBroken) throw fr('le fichier compagnon .xmp est abîmé');
+  if (old.originalDate && !p.originalDate) p.originalDate = old.originalDate;
+  await writeStream(await loc.dir.getFileHandle(name, {create: true}), xmpBuild(oldStr, mergeInfo(buildInfo(p), old, p), false));
+}
+
+/** Transforme les mots clés lus dans une photo en étiquettes de l'application */
+async function tagsFromMeta(m, st) {
+  const ids = [], done = new Set(), zoneByName = new Map(ZONES.map(z => [norm(zoneName(z)), z]));
+  const use = async (label, zone, foreign) => {
+    label = label.trim(); const k = norm(label); if (!k || done.has(k)) return; done.add(k);
+    let t = S.tags.find(x => norm(x.label) === k);
+    if (!t) { t = await createTag(label, zone); if (foreign) { t.foreign = true; await saveTag(t); if (st) st.foreign++; } if (st) st.newTags++; }
+    ids.push(t.id);
+  };
+  for (const e of m.mpfTags) { const z = e.slice(0, e.indexOf('|')); await use(e.slice(e.indexOf('|') + 1), ZONES.includes(z) ? z : 'top', !ZONES.includes(z)); }
+  for (const h of m.hier) { if (sysHier(h)) continue; const parts = h.split('|'), z = zoneByName.get(norm(parts[0])); if (z && parts.length > 1) await use(parts.at(-1), z, false); }
+  for (const k of m.keywords) if (!sysKw(k)) await use(k, 'top', true);
+  for (const h of m.hier) if (!sysHier(h)) await use(h.split('|').pop(), 'top', true);
+  return ids;
+}
+
+/* ---- Inscription automatique (quelques secondes après un changement, et en quittant la photo) ---- */
+let syncTimer = 0, syncing = false, syncAgain = false;
+function isPending(p) {
+  if (!filesMode() || !p.loc || p.trashed || p.demo) return false;
+  if (p.syncedSig === undefined && !p.tags.length && !p.description) return false;   // jamais étiquetée : on n'y touche pas
+  return syncSig(p) !== p.syncedSig;
+}
+function scheduleSync(ms = 2500) { if (!filesMode()) return; clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), ms); }
+async function syncNow(ask = false) {
+  if (!filesMode()) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true; clearTimeout(syncTimer);
+  try {
+    const list = S.photos.filter(isPending);
+    if (ask) for (const h of new Set(list.map(permOwner).filter(Boolean))) await hasPerm(h, true);
+    for (const p of list) {
+      const sig = syncSig(p);
+      if (!ask && p.syncError && p.syncError !== 'perm' && p.errSig === sig) continue;   // déjà échoué : on attend « Réessayer »
+      const h = permOwner(p);
+      if (!h) { p.syncError = 'dossier d\'origine inconnu'; p.errSig = sig; continue; }
+      if (!(await hasPerm(h, false))) { p.syncError = 'perm'; continue; }
+      try { await writeTags(p); p.syncedSig = sig; p.syncError = null; p.writtenAt = Date.now(); await DB.put('photos', p); }
+      catch (e) { console.warn('inscription', p.path, e); p.syncError = errText(e); p.errSig = sig; }
+    }
+  } finally {
+    syncing = false; updateSyncUI();
+    if (syncAgain) { syncAgain = false; scheduleSync(300); }
+  }
+}
+function photoSyncHtml(p) {
+  if (!p) return '';
+  let s = `<span>${I('file')}Date d'origine : ${esc(fmtDate(p.originalDate || p.lastModified))}</span>`;
+  if (S.settings.writeMode !== 'files' || p.demo) return s;
+  if (!p.loc) return s + `<span class="muted">· pas reliée à son fichier (voir Réglages)</span>`;
+  if (isPending(p)) return s + (p.syncError && p.syncError !== 'perm' ? `<span class="warn">${I('alert')}Pas inscrite : ${esc(p.syncError)}</span>` : `<span class="muted">${I('refresh')}Inscription dans la photo…</span>`);
+  if (p.writtenAt || p.tags.length || p.description) return s + `<span class="okc">${I('check')}Étiquettes inscrites dans la photo</span>`;
+  return s;
+}
+function updateSyncUI() {
+  const st = $('#syncState'); if (st) st.innerHTML = photoSyncHtml(cur());
+  const bar = $('#syncBar'); if (!bar) return;
+  const perm = S.photos.filter(p => isPending(p) && p.syncError === 'perm');
+  bar.hidden = !perm.length || S.screen !== 'tag';
+  if (!bar.hidden) {
+    bar.innerHTML = `<span><i class=ic-lock></i>Pour inscrire les étiquettes dans vos photos (${perm.length}), Chrome demande votre accord.</span><button class="btn ok" id="permBtn"><i class=ic-check></i>Autoriser</button>`;
+    $('#permBtn').onclick = () => syncNow(true);
+  }
+}
+
+/** Relier des photos ajoutées sans accès en écriture (ou avant cette fonction) à leur dossier */
+async function relink() {
+  let dir; try { dir = await showDirectoryPicker({id: 'photos', mode: 'readwrite'}); } catch (e) { return fsFailed(e, false); }
+  busy('Je regarde le contenu…', 0);
+  const r = await addRoot(dir), imgs = [], xmps = new Map();
+  await walkDir(dir, '', imgs, xmps);
+  const orphans = S.photos.filter(p => !p.loc && !p.demo); let n = 0;
+  const used = new Set(S.photos.filter(p => p.loc?.root === r.id).map(p => p.loc.rel));   // fichiers déjà reliés à une autre photo
+  const files = [];
+  for (let i = 0; i < imgs.length; i++) {
+    busy(`Je cherche vos photos… ${i + 1} sur ${imgs.length}`, i / imgs.length);
+    if (used.has(imgs[i].rel)) continue;
+    try {
+      const it = imgs[i], f = await it.h.getFile(), u8 = new Uint8Array(await f.arrayBuffer());
+      const legacy = orphans.some(q => !q.hash.startsWith('i:') && q.name === f.name);
+      files.push({rel: it.rel, name: f.name, h: await contentHash(u8), full: legacy ? await sha256(u8) : null});
+    } catch (e) { console.warn(e); }
+  }
+  // Ordre de préférence : même image + même chemin, puis même image + même nom, puis même image
+  const tests = [(p, f) => p.path.endsWith('/' + f.rel) || p.path === f.rel, (p, f) => p.name === f.name, () => true];
+  for (const test of tests) for (const f of files) {
+    if (f.taken) continue;
+    const p = orphans.find(q => !q.loc && (q.hash === f.h || (f.full && q.hash === f.full)) && test(q, f));
+    if (p) { f.taken = true; p.loc = {root: r.id, rel: f.rel}; p.hash = f.h; p.path = dir.name + '/' + f.rel; await DB.put('photos', p); n++; }
+  }
+  busy(false); reindex();
+  await modal(`<h2><i class=ic-check></i>${n} photo${n > 1 ? 's' : ''} reliée${n > 1 ? 's' : ''}</h2>
+    <p>${n ? 'Leurs étiquettes vont être inscrites dans les fichiers.' : 'Je n\'ai retrouvé aucune de vos photos dans ce dossier.'}</p>
+    ${orphans.some(p => !p.loc) ? `<p class="hint">${orphans.filter(p => !p.loc).length} photo(s) ne sont toujours pas reliées : elles sont peut-être dans un autre dossier.</p>` : ''}${okBtn()}`);
+  syncNow(true); refresh();
+}
+
+/* ---- Cache des images (adresses temporaires) ---- */
+const urlCache = new Map(); const previewOrder = [];
+async function imgURL(p, kind = 'thumb') {
+  const k = p.blobId + kind;
+  if (urlCache.has(k)) return urlCache.get(k);
+  const b = await DB.get('blobs', p.blobId); if (!b) return '';
+  const u = URL.createObjectURL(b[kind]); urlCache.set(k, u);
+  if (kind === 'preview') { previewOrder.push(k); while (previewOrder.length > 8) { const old = previewOrder.shift(); URL.revokeObjectURL(urlCache.get(old)); urlCache.delete(old); } }
+  return u;
+}
+async function openViewer(p) {
+  $('#viewerImg').src = await imgURL(p, 'preview');
+  $('#viewer').classList.remove('zoomed'); $('#viewer').hidden = false; $('#vClose').focus();
+}
+$('#vClose').onclick = () => { $('#viewer').hidden = true; };
+$('#vZoom').onclick = $('#viewerImg').onclick = () => $('#viewer').classList.toggle('zoomed');
+
+/* ---- Photos d'exemple (pour tester sans rien avoir) ---- */
+async function makeDemo() {
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const docs = [
+    ['ACTE DE NAISSANCE', 'Jean Marie MARTIN', 'Saint-Malo', 1872, 22], ['ACTE DE MARIAGE', 'Pierre DUPOND et Marie LEROUX', 'Rennes', 1898, 30],
+    ['ACTE DE DÉCÈS', 'Louise BERNARD veuve MARTIN', 'Vitré', 1915, 14], ['RECENSEMENT', 'Famille MARTIN — rue des Lices', 'Dinan', 1906, 26],
+    ['REGISTRE MATRICULE', 'Joseph DUPOND, classe 1912', 'Rennes', 1914, 18], ['LETTRE', 'Ma chère cousine Germaine,', 'Paris', 1932, 10],
+  ];
+  const draw = (d, i) => {
+    const c = document.createElement('canvas'); c.width = 1200; c.height = 1600; const x = c.getContext('2d');
+    x.fillStyle = ['#efe2c0', '#f3ead2', '#e8dcc0'][i % 3]; x.fillRect(0, 0, 1200, 1600);
+    for (let k = 0; k < 6; k++) { x.fillStyle = `rgba(140,100,40,${.05 + rnd() * .08})`; x.beginPath(); x.arc(rnd() * 1200, rnd() * 1600, 40 + rnd() * 160, 0, 7); x.fill(); }
+    x.fillStyle = '#2a1d0e'; x.textAlign = 'center'; x.font = 'bold 64px Georgia,serif'; x.fillText(d[0], 600, 160 + i * 30);
+    x.font = 'italic 46px Georgia,serif'; x.fillText(d[1], 600, 260 + i * 30); x.fillText(d[2] + ', ' + d[3], 600, 330 + i * 30);
+    x.textAlign = 'left'; x.strokeStyle = '#3b2a14'; x.lineWidth = 3;
+    for (let l = 0; l < d[4]; l++) { const y = 440 + i * 30 + l * 46; x.beginPath(); x.moveTo(110, y); for (let s = 110; s < 1090 - rnd() * 300; s += 18) x.lineTo(s, y + Math.sin(s / (9 + i)) * 6); x.stroke(); }
+    if (i === 5) { x.fillStyle = '#5b4a35'; x.fillRect(700, 1100, 360, 420); }
+    return c;
+  };
+  const files = []; const base = Date.parse('2019-06-14T10:00:00');
+  for (let i = 0; i < docs.length; i++) {
+    const c = draw(docs[i], i), b = await toBlob(c, .9);
+    const f = new File([b], `scan_${String(i + 1).padStart(3, '0')}.jpg`, {type: 'image/jpeg', lastModified: base + i * 3600e3});
+    f._path = 'Disque dur/Généalogie/' + f.name; f._demo = true; files.push(f);
+    if (i === 0) { const g = new File([b], 'IMG_0412.jpg', {type: 'image/jpeg', lastModified: base + 86400e3}); g._path = 'Carte SD/DCIM/IMG_0412.jpg'; g._demo = true; files.push(g); }
+    if (i === 1) { // quasi-double : même acte, réenregistré plus petit et plus clair
+      const c2 = document.createElement('canvas'); c2.width = 900; c2.height = 1200; const x2 = c2.getContext('2d');
+      x2.filter = 'brightness(1.06) contrast(0.95)'; x2.drawImage(c, 0, 0, 900, 1200);
+      const g = new File([await toBlob(c2, .7)], 'mariage dupond (2).jpg', {type: 'image/jpeg', lastModified: base + 3600e3 + 40e3});
+      g._path = 'Clé USB/Mariage Dupond/' + g.name; g._demo = true; files.push(g);
+    }
+  }
+  importFiles(files);
+}
+$('#demoBtn').onclick = makeDemo;
+
+/* =====================================================================
+   5. DOUBLONS
+   - exacts  : même empreinte SHA-256 (fichier identique octet par octet)
+   - proches : même allure (empreinte visuelle 32×32, corrélation ≥ 0,90)
+               ou même taille de fichier (±2 %) + dates proches (±10 min) + allure voisine
+   ===================================================================== */
+const sigCache = new Map();
+function sigVec(p) {
+  let v = sigCache.get(p.blobId); if (v) return v;
+  const bin = atob(p.sig || ''), n = bin.length; v = new Float32Array(n); let m = 0, s = 0;
+  for (let i = 0; i < n; i++) { v[i] = bin.charCodeAt(i); m += v[i]; } m /= n || 1;
+  for (let i = 0; i < n; i++) { v[i] -= m; s += v[i] * v[i]; } s = Math.sqrt(s) || 1;
+  for (let i = 0; i < n; i++) v[i] /= s;
+  sigCache.set(p.blobId, v); return v;
+}
+const pairKey = (a, b) => [a.id, b.id].sort().join('|');
+function similarity(a, b) { const va = sigVec(a), vb = sigVec(b); if (va.length !== vb.length) return 0; let d = 0; for (let i = 0; i < va.length; i++) d += va[i] * vb[i]; return d; }
+
+function findDuplicates() {
+  if (S.dupPairs) return S.dupPairs;
+  const pairs = [], groups = new Map();
+  for (const p of live()) { if (!groups.has(p.hash)) groups.set(p.hash, []); groups.get(p.hash).push(p); }
+  for (const g of groups.values()) for (let i = 1; i < g.length; i++) if (!S.ignored.has(pairKey(g[0], g[i]))) pairs.push({a: g[0], b: g[i], exact: true, sim: 1});
+  const reps = [...groups.values()].map(g => g[0]).filter(p => p.sig);
+  for (let i = 0; i < reps.length; i++) for (let j = i + 1; j < reps.length; j++) {
+    const a = reps[i], b = reps[j], ra = a.width / a.height, rb = b.width / b.height;
+    if (Math.abs(ra - rb) / Math.max(ra, rb) > .06) continue;
+    const sim = similarity(a, b);
+    const sizeClose = Math.abs(a.size - b.size) <= .02 * Math.max(a.size, b.size);
+    const dateClose = Math.abs((a.originalDate || a.lastModified) - (b.originalDate || b.lastModified)) <= 10 * 60e3;
+    if ((sim >= .9 ||(sizeClose && dateClose && sim >= .8)) && !S.ignored.has(pairKey(a, b))) pairs.push({a, b, exact: false, sim});
+  }
+  pairs.sort((x, y) => (y.exact - x.exact) || (y.sim - x.sim));
+  return (S.dupPairs = pairs);
+}
+/** Garde « keep », met « drop » à la corbeille en reprenant ses étiquettes et sa description */
+function mergeInto(keep, drop) {
+  keep.tags = [...new Set([...keep.tags, ...drop.tags])];
+  if (drop.description && !keep.description.includes(drop.description)) keep.description = (keep.description ? keep.description + '\n' : '') + drop.description;
+  keep.copies = [...new Set([...(keep.copies || []), drop.path, ...(drop.copies || [])])];
+  drop.trashed = true; drop.trashReason = 'double de ' + keep.name;
+}
+const snap = list => list.map(p => JSON.parse(JSON.stringify(p)));
+function undoRestore(saved) {
+  return async () => {
+    for (const o of saved) { const p = S.byId.get(o.id); Object.assign(p, o); await savePhoto(p); }
+    S.dupPairs = null; refresh();
+  };
+}
+async function keepOne(keep, drop) {
+  const saved = snap([keep, drop]);
+  mergeInto(keep, drop); await savePhoto(keep); await savePhoto(drop);
+  S.dupPairs = S.dupPairs.filter(x => !x.a.trashed && !x.b.trashed);
+  toast(`« ${drop.name} » est dans la corbeille.`, undoRestore(saved));
+  renderDups();
+}
+async function cleanAllExact() {
+  const groups = new Map();
+  for (const p of live()) { if (!groups.has(p.hash)) groups.set(p.hash, []); groups.get(p.hash).push(p); }
+  const touched = [], todo = [];
+  for (const g of groups.values()) if (g.length > 1) { g.sort((a, b) => a.addedAt - b.addedAt); touched.push(...g); todo.push(g); }
+  const saved = snap(touched); let n = 0;
+  for (const g of todo) for (let i = 1; i < g.length; i++) if (!S.ignored.has(pairKey(g[0], g[i]))) { mergeInto(g[0], g[i]); n++; }
+  await DB.putMany('photos', touched);
+  S.dupPairs = null;
+  toast(`${n} copie${n > 1 ? 's' : ''} identique${n > 1 ? 's' : ''} mise${n > 1 ? 's' : ''} à la corbeille.`, undoRestore(saved));
+  renderDups();
+}
+async function notDuplicates(pair) {
+  const k = pairKey(pair.a, pair.b); S.ignored.add(k); await saveMeta('ignored', [...S.ignored]);
+  S.dupPairs = S.dupPairs.filter(x => x !== pair);
+  toast('D\'accord, je garde les deux.', async () => { S.ignored.delete(k); await saveMeta('ignored', [...S.ignored]); S.dupPairs = null; refresh(); });
+  renderDups();
+}
+
+function renderDups() {
+  const pairs = findDuplicates(), main = $('#dupMain');
+  if (S.dupIdx >= pairs.length) S.dupIdx = 0;
+  $('#dupCounter').textContent = pairs.length ? `Doubles : ${S.dupIdx + 1} sur ${pairs.length}` : 'Doubles';
+  if (!pairs.length) {
+    main.innerHTML = `<div class="panel" style="text-align:center;padding:2rem"><span class="big-ic"><i class=ic-check></i></span><h2>Aucun double à vérifier</h2>
+      <p>Toutes vos photos sont uniques.</p><div class="row" style="justify-content:center;margin-top:1rem"><button class="btn big primary" data-go="tag"><i class=ic-tag></i>Mettre des étiquettes</button><button class="btn big" data-go="home"><i class=ic-arrow-left></i>Accueil</button></div></div>`;
+    return;
+  }
+  const exactN = pairs.filter(x => x.exact).length;
+  const pair = pairs[S.dupIdx], {a, b} = pair;
+  const px = p => p.width * p.height, best = px(a) === px(b) ? (a.size >= b.size ? 'a' : 'b') : (px(a) > px(b) ? 'a' : 'b');
+  const facts = (p, o) => {
+    const row = (k, v, ov) => `<tr><td>${k}</td><td class="${v !== ov ? 'diff' : ''}">${esc(v)}</td></tr>`;
+    return `<table class="facts">
+      ${row('Fichier', p.name, o.name)}${row('Dossier', dirOf(p.path), dirOf(o.path))}
+      ${row('Qualité', `${p.width} × ${p.height} points`, `${o.width} × ${o.height} points`)}
+      ${row('Poids', fmtSize(p.size), fmtSize(o.size))}${row('Date', fmtDate(p.lastModified), fmtDate(o.lastModified))}
+      ${row('Étiquettes', p.tags.map(t => S.tagById.get(t)?.label).filter(Boolean).join(', ') || 'aucune', o.tags.map(t => S.tagById.get(t)?.label).filter(Boolean).join(', ') || 'aucune')}
+    </table>`;
+  };
+  const side = (p, o, key, arrow) => `<div class="side ${best === key && !pair.exact ? 'best' : ''}">
+      <div class="img" data-zoom="${p.id}"><img data-src="${p.id}" alt="${esc(p.name)}"></div>
+      ${best === key && !pair.exact ? '<span class="badge"><i class=ic-star></i>Meilleure qualité</span>' : ''}
+      ${facts(p, o)}
+      <button class="btn big ok" data-keep="${key}"><i class=ic-check></i>Garder celle-ci ${arrow}</button></div>`;
+  main.innerHTML = `
+    ${exactN > 1 ? `<div class="banner"><span><i class=ic-copy></i><b>${exactN}</b> copies sont <b>parfaitement identiques</b> (même fichier). Inutile de les regarder une par une.</span>
+      <button class="btn big ok" id="cleanExact"><i class=ic-check></i>Garder une seule copie de chaque</button></div>` : ''}
+    <h2 class="pairtitle">${pair.exact ? '<i class=ic-equal></i>Ces deux photos sont <u>identiques</u> (même fichier).' : `<i class=ic-similar></i>Ces deux photos se ressemblent beaucoup (${Math.round(pair.sim * 100)} %).`}</h2>
+    <p class="pairsub muted">Laquelle voulez-vous garder ? L'autre ira dans la corbeille.</p>
+    <div class="pair">${side(a, b, 'a', '<kbd>←</kbd>')}${side(b, a, 'b', '<kbd>→</kbd>')}</div>
+    <div class="row" style="justify-content:center;margin-top:1rem">
+      <button class="btn big" id="bothBtn">Ce ne sont pas des doubles — garder les deux <kbd>↓</kbd></button>
+      <button class="btn big" id="skipBtn">Passer<i class=ic-chevron-right></i></button>
+    </div>
+    <p class="hint" style="text-align:center">Les étiquettes et la description de la photo enlevée sont reportées sur celle que vous gardez. Un clic sur une image l'agrandit.</p>`;
+  $$('img[data-src]', main).forEach(async im => { im.src = await imgURL(S.byId.get(im.dataset.src), 'preview'); });
+  $$('[data-keep]', main).forEach(btn => btn.onclick = () => btn.dataset.keep === 'a' ? keepOne(a, b) : keepOne(b, a));
+  $$('[data-zoom]', main).forEach(el => el.onclick = () => openViewer(S.byId.get(el.dataset.zoom)));
+  $('#bothBtn').onclick = () => notDuplicates(pair);
+  $('#skipBtn').onclick = () => { S.dupIdx = (S.dupIdx + 1) % pairs.length; renderDups(); };
+  const ce = $('#cleanExact'); if (ce) ce.onclick = cleanAllExact;
+}
+$('#dupRescan').onclick = () => { S.dupPairs = null; S.dupIdx = 0; renderDups(); };
+
+/* =====================================================================
+   6. ÉTIQUETTES : zones, glisser-déposer, appui long, geste pour enlever
+   ===================================================================== */
+const cur = () => S.byId.get(S.list[S.idx]);
+let renderToken = 0;
+
+async function renderTag() {
+  const p = cur();
+  $('#tagCounter').textContent = p ? `Photo ${S.idx + 1} sur ${S.list.length}` : 'Aucune photo';
+  $('#prevBtn').disabled = !p || S.idx <= 0;
+  $('#nextBtn').disabled = !p || S.idx >= S.list.length - 1;
+  $('#trashBtn').hidden = !p || p.trashed;
+  renderZones(); renderApplied();
+  $('#desc').value = p?.description || ''; $('#desc').disabled = !p;
+  if (!wantListen) $('#voicePanel').hidden = true;
+  $('#tagList').innerHTML = S.tags.map(t => `<option value="${esc(t.label)}">`).join('');
+  const img = $('#stageImg');
+  updateSyncUI();
+  if (!p) {
+    img.removeAttribute('src');
+    $('#stageCaption').innerHTML = 'Aucune photo pour l\'instant. <button class="btn small primary" data-go="import"><i class=ic-import></i>Ajouter des photos</button>';
+    return;
+  }
+  $('#stageCaption').innerHTML = `<i class=ic-file></i><span>${esc(p.name)} — ${esc(dirOf(p.path))}${p.trashed ? ' — (dans la corbeille)' : ''}</span>`;
+  const tok = ++renderToken, u = await imgURL(p, 'preview');
+  if (tok === renderToken) img.src = u;
+  // Préchargement de la suivante
+  const nx = S.byId.get(S.list[S.idx + 1]); if (nx) imgURL(nx, 'preview');
+}
+function useCount() { const m = new Map(); for (const p of live()) for (const t of p.tags) m.set(t, (m.get(t) || 0) + 1); return m; }
+function renderZones() {
+  const p = cur(), uses = useCount();
+  for (const z of ZONES) {
+    $(`[data-rename="${z}"]`).textContent = zoneName(z);
+    $(`#zone-${z} .list`).innerHTML = tagsOfZone(z).map(t =>
+      `<button class="tag ${p?.tags.includes(t.id) ? 'on' : ''} ${t.foreign ? 'ext' : ''}" data-id="${t.id}" style="background:${colorOf(t)}" title="${t.foreign ? 'Trouvée dans une photo — appui long pour la ranger dans une zone. ' : ''}Clic : coller / décoller · Glisser vers la photo · Appui long : ranger, couleur">${esc(t.label)}${uses.get(t.id) ? `<span class="uses">${uses.get(t.id)}</span>` : ''}</button>`
+    ).join('') + `<button class="addtag" data-add="${z}"><i class=ic-plus></i>Nouveau</button>`;
+  }
+}
+function renderApplied(popId) {
+  const p = cur(), box = $('#applied');
+  const list = (p?.tags || []).map(id => S.tagById.get(id)).filter(Boolean);
+  box.innerHTML = list.length ? list.map(t =>
+    `<span class="chip ${t.id === popId ? 'pop' : ''}" data-id="${t.id}" style="background:${colorOf(t)}">${esc(t.label)}<button class="x" aria-label="Enlever ${esc(t.label)}"><i class=ic-x></i></button></span>`).join('')
+    : '<span class="empty">Aucune étiquette. Touchez une étiquette autour, faites-la glisser sur la photo, ou parlez.</span>';
+}
+async function addTag(id, p = cur()) {
+  if (!p || p.tags.includes(id)) return false;
+  p.tags.push(id); await savePhoto(p);
+  renderZones(); renderApplied(id); return true;
+}
+async function removeTag(id) {
+  const p = cur(); if (!p) return;
+  const i = p.tags.indexOf(id); if (i < 0) return;
+  p.tags.splice(i, 1); await savePhoto(p); renderZones(); renderApplied();
+  const t = S.tagById.get(id);
+  toast(`Étiquette « ${t?.label} » enlevée.`, async () => { if (!p.tags.includes(id)) p.tags.splice(i, 0, id); await savePhoto(p); refresh(); });
+}
+const toggleTag = id => cur()?.tags.includes(id) ? removeTag(id) : addTag(id);
+
+async function createTag(label, zone) {
+  label = label.trim(); if (!label) return null;
+  const ex = S.tags.find(t => norm(t.label) === norm(label)); if (ex) return ex;
+  const order = Math.max(-1, ...tagsOfZone(zone).map(t => t.order)) + 1;
+  const t = {id: uid(), label: cap(label), zone, order, color: COLORS[ZONE_COLOR[zone]]};
+  S.tags.push(t); S.tagById.set(t.id, t); await saveTag(t); return t;
+}
+/** Demande un nom puis crée l'étiquette (option : choisir la zone) */
+async function askNewTag(zone, initial = '') {
+  const v = await modal(`<h2><i class=ic-plus></i>Nouvelle étiquette</h2>
+    <label class="lbl">Le mot à ajouter<input class="inp" id="nt" value="${esc(initial)}" placeholder="Ex. : Lemarchand, Quimper, Communion…"></label>
+    ${zone ? '' : `<div class="lbl">Où la ranger ?</div>`}
+    <div class="row end">${zone ? `<button class="btn big" data-v="no">Annuler</button><button class="btn big ok" data-v="${zone}"><i class=ic-check></i>Ajouter</button>`
+      : `<button class="btn" data-v="no">Annuler</button>` + ZONES.map(z => `<button class="btn big ok" data-v="${z}">${esc(zoneName(z))}</button>`).join('')}</div>`,
+    d => { const i = $('#nt', d); i.focus(); i.onkeydown = e => { if (e.key === 'Enter' && zone) { e.preventDefault(); d.querySelector(`[data-v="${zone}"]`).click(); } }; });
+  const label = $('#nt')?.value.trim();
+  if (!v || v === 'no' || !label) return null;
+  return createTag(label, v);
+}
+
+/** Appui long sur une étiquette : nom, couleur, place, ordre, suppression */
+async function editTag(id) {
+  for (;;) {
+    const t = S.tagById.get(id); if (!t) return;
+    const n = S.photos.filter(p => p.tags.includes(id)).length;
+    const v = await modal(`<h2>Ranger l'étiquette</h2>
+      <label class="lbl">Nom<input id="te-name" class="inp" value="${esc(t.label)}"></label>
+      <div class="lbl">Couleur</div><div class="swatches">${COLORS.map((c, i) => `<button class="sw ${t.color === c ? 'sel' : ''}" data-v="color:${i}" style="background:${palette()[i]}" aria-label="Couleur ${i + 1}"></button>`).join('')}</div>
+      <div class="lbl">Place sur l'écran</div><div class="row">${ZONES.map(z => `<button class="btn ${t.zone === z ? 'primary' : ''}" data-v="zone:${z}">${esc(zoneName(z))}</button>`).join('')}</div>
+      <div class="lbl">Ordre dans sa zone</div><div class="row"><button class="btn" data-v="step:-1"><i class=ic-chevron-left></i>Plus tôt</button><button class="btn" data-v="step:1">Plus tard<i class=ic-chevron-right></i></button></div>
+      <p class="hint">Astuce : vous pouvez aussi garder le doigt appuyé sur une étiquette puis la lâcher sur une autre pour les échanger, ou sur une autre zone pour l'y déplacer.</p>
+      <div class="row end"><button class="btn danger" data-v="delete"><i class=ic-trash></i>Supprimer</button><button class="btn ok big" data-v="done"><i class=ic-check></i>Terminé</button></div>`);
+    const name = $('#te-name')?.value.trim();
+    if (name && name !== t.label) { t.label = name; await saveTag(t); }
+    if (!v || v === 'done') break;
+    const [act, arg] = v.split(':');
+    if (act === 'color') { t.color = COLORS[+arg]; await saveTag(t); }
+    if (act === 'zone' && arg !== t.zone) await moveTagToZone(t, arg);
+    if (act === 'step') {
+      const list = tagsOfZone(t.zone), i = list.indexOf(t), o = list[i + +arg];
+      if (o) { [t.order, o.order] = [o.order, t.order]; await DB.putMany('tags', [t, o]); }
+    }
+    if (act === 'delete') {
+      if (await confirmBox('Supprimer cette étiquette ?', `« ${esc(t.label)} » sera enlevée ${n ? `de <b>${n}</b> photo(s)` : 'de la liste'}.`, '<i class=ic-trash></i>Supprimer', 'Non, la garder', true)) {
+        const touched = S.photos.filter(p => p.tags.includes(id)), saved = snap(touched), savedT = {...t};
+        touched.forEach(p => p.tags = p.tags.filter(x => x !== id)); await DB.putMany('photos', touched);
+        S.tags = S.tags.filter(x => x !== t); await DB.del('tags', id); reindex(); refresh();
+        toast(`Étiquette « ${t.label} » supprimée.`, async () => { S.tags.push(savedT); await saveTag(savedT); reindex(); await undoRestore(saved)(); });
+        return;
+      }
+    }
+    reindex(); refresh();
+  }
+  reindex(); refresh();
+}
+async function moveTagToZone(t, zone, beforeTag) {
+  t.zone = zone; t.foreign = false;   // une étiquette « trouvée » rangée devient une étiquette normale
+  const list = tagsOfZone(zone).filter(x => x !== t);
+  const at = beforeTag ? list.indexOf(beforeTag) : list.length;
+  list.splice(at < 0 ? list.length : at, 0, t);
+  list.forEach((x, i) => x.order = i);
+  await DB.putMany('tags', list);
+}
+async function swapTags(a, b) {
+  [a.zone, b.zone] = [b.zone, a.zone]; [a.order, b.order] = [b.order, a.order]; a.foreign = b.foreign = false;
+  await DB.putMany('tags', [a, b]); reindex(); scheduleSync();
+}
+
+/* ---- Glisser-déposer universel (souris + doigt) ----
+   clic court       → coller/décoller l'étiquette
+   glisser          → vers la photo pour coller
+   appui long       → l'étiquette « se soulève » : glisser pour échanger/déplacer, ou lâcher sur place pour la ranger */
+let drag = null;
+const board = $('#board');
+board.addEventListener('contextmenu', e => { if (e.target.closest('.tag,.chip')) e.preventDefault(); });
+board.addEventListener('click', async e => {
+  const add = e.target.closest('[data-add]');
+  if (add) { const t = await askNewTag(add.dataset.add); if (t) { reindex(); await addTag(t.id); } return; }
+  const rn = e.target.closest('[data-rename]');
+  if (rn) {
+    const z = rn.dataset.rename;
+    const v = await modal(`<h2>Nom de cette zone</h2><input class="inp" id="zn" value="${esc(zoneName(z))}"><div class="row end"><button class="btn" data-v="no">Annuler</button><button class="btn ok big" data-v="ok"><i class=ic-check></i>Enregistrer</button></div>`);
+    const val = $('#zn')?.value.trim(); if (v === 'ok' && val) { S.settings.zoneNames[z] = val; await saveMeta('settings', S.settings); renderZones(); }
+  }
+});
+board.addEventListener('pointerdown', e => {
+  const el = e.target.closest('.tag[data-id]'); if (!el || e.button > 0) return;
+  const list = el.parentElement;
+  drag = {id: el.dataset.id, el, x0: e.clientX, y0: e.clientY, pid: e.pointerId, mode: 'press', long: false, touch: e.pointerType !== 'mouse',
+    scrollAxis: getComputedStyle(list).flexDirection === 'row' ? 'x' : 'y'};
+  drag.timer = setTimeout(() => { if (drag?.mode === 'press') { drag.long = true; el.classList.add('lifted'); navigator.vibrate?.(40); } }, 550);
+});
+addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+  if (drag.mode === 'press') {
+    if (Math.hypot(dx, dy) < 10) return;
+    // Au doigt : un mouvement dans le sens du défilement = on fait défiler la zone, pas de glisser
+    if (drag.touch && !drag.long && (drag.scrollAxis === 'x' ? Math.abs(dx) > Math.abs(dy) : Math.abs(dy) > Math.abs(dx))) { endDrag(); return; }
+    clearTimeout(drag.timer);
+    drag.mode = drag.long ? 'arrange' : 'apply';
+    const r = drag.el.getBoundingClientRect();
+    drag.ox = drag.x0 - r.left; drag.oy = drag.y0 - r.top;
+    drag.ghost = drag.el.cloneNode(true); drag.ghost.classList.add('ghost'); drag.ghost.classList.remove('lifted');
+    document.body.append(drag.ghost);
+  }
+  drag.ghost.style.transform = `translate(${e.clientX - drag.ox}px,${e.clientY - drag.oy}px) rotate(-3deg)`;
+  const tgt = dropTarget(e.clientX, e.clientY);
+  $$('.drop-hover,.drop-target').forEach(x => x.classList.remove('drop-hover', 'drop-target'));
+  if (tgt.stage) $('#stage').classList.add('drop-hover');
+  else if (drag.mode === 'arrange' && tgt.tag && tgt.tag.dataset.id !== drag.id) tgt.tag.classList.add('drop-target');
+  else if (drag.mode === 'arrange' && tgt.zone) tgt.zone.classList.add('drop-hover');
+});
+document.addEventListener('touchmove', e => { if ((drag && (drag.long || drag.mode !== 'press')) || swipe) e.preventDefault(); }, {passive: false});
+function dropTarget(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return {stage: el?.closest('#stage, #applied'), tag: el?.closest('.tag[data-id]'), zone: el?.closest('.zone')};
+}
+addEventListener('pointerup', async e => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  const d = drag; endDrag();
+  const t = S.tagById.get(d.id); if (!t) return;
+  if (d.mode === 'press') return d.long ? editTag(d.id) : toggleTag(d.id);
+  const tgt = dropTarget(e.clientX, e.clientY);
+  if (tgt.stage) { if (!(await addTag(d.id))) toast('Cette étiquette est déjà sur la photo.'); return; }
+  if (d.mode === 'arrange') {
+    if (tgt.tag && tgt.tag.dataset.id !== d.id) { await swapTags(t, S.tagById.get(tgt.tag.dataset.id)); renderZones(); toast('Étiquettes échangées.'); }
+    else if (tgt.zone) { await moveTagToZone(t, tgt.zone.dataset.zone); reindex(); renderZones(); toast(`Déplacée dans « ${zoneName(t.zone)} ».`); }
+  }
+});
+addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.pid) endDrag(); });
+function endDrag() {
+  if (!drag) return;
+  clearTimeout(drag.timer); drag.el.classList.remove('lifted'); drag.ghost?.remove();
+  $$('.drop-hover,.drop-target').forEach(x => x.classList.remove('drop-hover', 'drop-target'));
+  drag = null;
+}
+
+/* ---- Geste « jeter » une étiquette collée pour l'enlever ---- */
+let swipe = null; const THROW = 100;
+const applied = $('#applied');
+applied.addEventListener('click', e => { const x = e.target.closest('.x'); if (x) removeTag(x.parentElement.dataset.id); });
+applied.addEventListener('pointerdown', e => {
+  const c = e.target.closest('.chip'); if (!c || e.target.closest('.x')) return;
+  swipe = {c, id: c.dataset.id, x0: e.clientX, y0: e.clientY, pid: e.pointerId, dx: 0, dy: 0, t0: performance.now()};
+  c.setPointerCapture(e.pointerId); c.style.transition = 'none'; c.style.zIndex = 50;
+});
+applied.addEventListener('pointermove', e => {
+  if (!swipe || e.pointerId !== swipe.pid) return;
+  const dx = e.clientX - swipe.x0, dy = e.clientY - swipe.y0, d = Math.hypot(dx, dy);
+  Object.assign(swipe, {dx, dy});
+  swipe.c.style.transform = `translate(${dx}px,${dy}px) rotate(${dx / 12}deg)`;
+  swipe.c.style.opacity = Math.max(.3, 1 - d / 320);
+  swipe.c.classList.toggle('will-remove', d > THROW);
+});
+const endSwipe = e => {
+  if (!swipe || e.pointerId !== swipe.pid) return;
+  const s = swipe; swipe = null;
+  const d = Math.hypot(s.dx, s.dy), speed = d / (performance.now() - s.t0);
+  s.c.style.transition = 'transform .25s ease, opacity .25s ease';
+  if (e.type === 'pointerup' && (d > THROW || (d > 40 && speed > .9))) {
+    s.c.style.transform = `translate(${s.dx * 5}px,${s.dy * 5}px) rotate(${s.dx / 3}deg)`; s.c.style.opacity = 0;
+    setTimeout(() => removeTag(s.id), 220);
+  } else { s.c.style.transform = ''; s.c.style.opacity = ''; s.c.classList.remove('will-remove'); }
+};
+applied.addEventListener('pointerup', endSwipe);
+applied.addEventListener('pointercancel', endSwipe);
+
+/* ---- Navigation, saisie au clavier, description ---- */
+async function step(n) {
+  const i = S.idx + n; if (i < 0 || i >= S.list.length) return;
+  await flushDesc(); S.idx = i; renderTag();
+  syncNow();   // on inscrit tout de suite la photo qu'on vient de quitter
+}
+$('#prevBtn').onclick = () => step(-1);
+$('#nextBtn').onclick = () => step(1);
+$('#stage').onclick = () => { const p = cur(); if (p) openViewer(p); };
+$('#trashBtn').onclick = async () => {
+  const p = cur(); if (!p) return;
+  const saved = snap([p]); p.trashed = true; p.trashReason = 'mise à la corbeille à la main'; await savePhoto(p);
+  const pos = S.idx; S.list.splice(pos, 1); if (S.idx >= S.list.length) S.idx = Math.max(0, S.list.length - 1);
+  renderTag();
+  toast(`« ${p.name} » est dans la corbeille.`, async () => { await undoRestore(saved)(); S.list.splice(pos, 0, p.id); S.idx = pos; renderTag(); });
+};
+let descTimer;
+$('#desc').addEventListener('input', () => { clearTimeout(descTimer); descTimer = setTimeout(flushDesc, 500); });
+async function flushDesc() {
+  clearTimeout(descTimer); const p = cur(); if (!p) return;
+  const v = $('#desc').value; if (v !== p.description) { p.description = v; await savePhoto(p); }
+}
+async function typedTag() {
+  const inp = $('#typeTag'), text = inp.value.trim(); if (!text || !cur()) return;
+  inp.value = '';
+  let t = findTag(text);
+  if (!t) t = await askNewTag(null, cap(text));
+  if (t) { reindex(); if (!(await addTag(t.id))) toast('Cette étiquette est déjà sur la photo.'); }
+  inp.focus();
+}
+$('#typeOk').onclick = typedTag;
+$('#typeTag').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); typedTag(); } });
+addEventListener('keydown', e => {
+  if (!$('#dlg').open && !$('#viewer').hidden && e.key === 'Escape') { $('#viewer').hidden = true; return; }
+  if ($('#dlg').open || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); doUndo(); return; }
+  if (S.screen === 'tag' && $('#viewer').hidden) {
+    if (e.key === 'ArrowRight') step(1); if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === ' ' && !e.repeat) { e.preventDefault(); document.activeElement?.blur(); voiceStart(); }
+  }
+  if (S.screen === 'dups' && S.dupPairs?.length) {
+    const pr = S.dupPairs[S.dupIdx];
+    if (e.key === 'ArrowLeft') keepOne(pr.a, pr.b); if (e.key === 'ArrowRight') keepOne(pr.b, pr.a);
+    if (e.key === 'ArrowDown') notDuplicates(pr);
+  }
+});
+
+/* =====================================================================
+   7. VOIX + DICTIONNAIRE PERSONNEL
+   Moteur : reconnaissance vocale du navigateur (Web Speech API).
+   - Chrome/Edge récents peuvent la faire SUR L'ORDINATEUR (processLocally) :
+     utilisé en priorité, avec les étiquettes connues comme « mots favoris ».
+   - Sinon, le navigateur envoie la voix (pas les photos) à son service en ligne :
+     on demande l'accord une fois, en clair.
+   ===================================================================== */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const STOP = new Set('le la les l de d du des et a au aux en un une dans sur pour avec acte actes ajoute ajouter mets mettre met etiquette etiquettes tag c est ca puis aussi alors euh ben voila ici photo'.split(' '));
+let rec = null, listening = false;
+
+async function localVoice() {
+  if (!canForceLocal()) return 'unavailable';
+  try {
+    if (SR.available) return await SR.available({langs: ['fr-FR'], processLocally: true});
+    if (SR.availableOnDevice) return await SR.availableOnDevice('fr-FR');
+  } catch (e) { console.info('voix locale :', e); }
+  return 'unavailable';
+}
+async function voiceMode() {
+  const avail = await localVoice();
+  if (avail === 'available') { S.settings.voice = 'local'; saveMeta('settings', S.settings); return 'local'; }
+  if (avail === 'downloadable' || avail === 'downloading') {
+    const v = await modal(`<h2><i class=ic-mic></i>Installer la voix française</h2><p>Votre navigateur peut comprendre la voix <b>directement sur cet ordinateur</b>, sans rien envoyer sur internet. Il faut le télécharger <b>une seule fois</b>.</p>
+      <div class="row end"><button class="btn" data-v="no">Plus tard</button><button class="btn big ok" data-v="dl"><i class=ic-import></i>Installer la voix</button></div>`);
+    if (v === 'dl') {
+      busy('Installation de la voix française…', .5);
+      try { const ok = SR.install ? await SR.install({langs: ['fr-FR'], processLocally: true}) : await SR.installOnDevice('fr-FR'); busy(false); if (ok !== false) { S.settings.voice = 'local'; saveMeta('settings', S.settings); return 'local'; } }
+      catch (e) { console.warn(e); }
+      busy(false);
+      await modal(`<h2>Installation impossible</h2><p>Je n'ai pas pu installer la voix. Vous pouvez écrire les étiquettes au clavier.</p>${okBtn()}`);
+    }
+    return null;
+  }
+  // Volontaire : jamais de reconnaissance en ligne (la voix ne quitte pas l'ordinateur)
+  S.settings.voice = 'none'; saveMeta('settings', S.settings);
+  await modal(`<h2><i class=ic-mic></i>La voix n'est pas possible ici</h2>
+    <p>Ce navigateur ne sait pas comprendre la voix <b>directement sur l'ordinateur</b>. Il faudrait envoyer votre voix sur internet, ce que l'application refuse de faire pour protéger votre vie privée.</p>
+    <p>Solution : ouvrir l'application avec <b>Google Chrome à jour</b> (menu ⋮ › Aide › À propos de Google Chrome).</p>
+    <p class="muted">En attendant, vous pouvez écrire les étiquettes au clavier, juste à côté du bouton « Parler ».</p>${okBtn()}`);
+  return null;
+}
+/** Vrai si le navigateur permet d'imposer la reconnaissance sur l'ordinateur */
+const canForceLocal = () => !!SR && 'processLocally' in SR.prototype;
+function setListening(on) {
+  listening = on; const b = $('#voiceBtn');
+  b.classList.toggle('listening', on); b.innerHTML = on ? '<i class=ic-stop></i>J\'écoute… (couper)' : '<i class=ic-mic></i>Parler';
+}
+/* Mode « mains libres » : un seul clic, le micro reste ouvert ; on enchaîne
+   « Dupond Rennes, suivante… ». Coupé par « stop », un clic, la barre d'espace,
+   en quittant l'écran, ou après 3 minutes sans parole. */
+let wantListen = false, idleTimer = 0, restarts = 0;
+const IDLE_MS = 3 * 60e3;
+function showVoice(html) { const vp = $('#voicePanel'); vp.hidden = false; vp.innerHTML = html; }
+function voiceStop(html) {
+  wantListen = false; clearTimeout(idleTimer);
+  try { rec?.abort(); } catch {}
+  setListening(false);
+  if (html) showVoice(html);
+}
+function bumpIdle() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => voiceStop('<p class="heard muted"><i class=ic-mic></i>Micro coupé après 3 minutes sans parole. Appuyez sur « Parler » ou sur la barre d\'espace pour reprendre.</p>'), IDLE_MS);
+}
+async function voiceStart() {
+  if (wantListen || listening) return voiceStop('<p class="heard muted"><i class=ic-mic></i>Micro coupé.</p>');
+  if (!cur()) return;
+  if (!SR) { await modal(`<h2>La voix n'est pas disponible ici</h2><p>Ce navigateur ne sait pas écouter. Ouvrez l'application avec <b>Google Chrome</b> ou <b>Microsoft Edge</b>, ou écrivez l'étiquette au clavier, juste à côté du bouton.</p>${okBtn()}`); return; }
+  const mode = await voiceMode(); if (mode !== 'local') return;
+  wantListen = true; restarts = 0; bumpIdle();
+  showVoice('<p class="heard muted"><i class=ic-mic></i>Je vous écoute. Dites les étiquettes puis « <b>suivante</b> », par exemple : « mariage Dupond Rennes, suivante ». Dites « <b>stop</b> » pour couper le micro.</p>');
+  listenOnce();
+}
+function listenOnce() {
+  if (!wantListen) return;
+  rec = new SR(); rec.lang = 'fr-FR'; rec.interimResults = true; rec.maxAlternatives = 3; rec.continuous = true;
+  rec.processLocally = true;   // obligatoire : la voix reste sur l'ordinateur
+  try { if (window.SpeechRecognitionPhrase) rec.phrases = [...S.tags.map(t => t.label), ...S.dict.map(d => d.correct), 'suivante', 'précédente', 'enlève', 'stop'].map(w => new SpeechRecognitionPhrase(w, 4)); } catch {}
+  rec.onstart = () => setListening(true);
+  rec.onresult = e => {
+    restarts = 0; bumpIdle();
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) speechQueue = speechQueue.then(() => handleSpeech([...r].map(a => a.transcript))).catch(console.warn);
+      else interim += r[0].transcript;
+    }
+    if (interim) showVoice(`<p class="heard">… ${esc(interim)}</p>`);
+  };
+  rec.onerror = e => {
+    if (e.error === 'no-speech' || e.error === 'aborted') return;   // silence : on relance simplement
+    const msg = {'not-allowed': 'Le micro est bloqué. Cliquez sur le petit micro dans la barre d\'adresse pour l\'autoriser.',
+      'service-not-allowed': 'Le micro est bloqué. Cliquez sur le petit micro dans la barre d\'adresse pour l\'autoriser.',
+      'audio-capture': 'Je ne trouve pas de micro sur cet ordinateur.',
+      'language-not-supported': 'La voix française n\'est pas installée sur cet ordinateur.'}[e.error] || 'La voix s\'est interrompue.';
+    if (e.error === 'language-not-supported') { S.settings.voice = null; saveMeta('settings', S.settings); }
+    voiceStop(`<p class="heard"><i class=ic-alert></i>${msg}</p>`);
+  };
+  rec.onend = () => {
+    // Le navigateur coupe parfois l'écoute tout seul (silence) : on relance discrètement
+    if (wantListen && S.screen === 'tag' && restarts++ < 20) setTimeout(listenOnce, 200);
+    else if (wantListen) voiceStop('<p class="heard muted"><i class=ic-mic></i>Micro coupé. Appuyez sur « Parler » ou sur la barre d\'espace pour reprendre.</p>');
+    else setListening(false);
+  };
+  try { rec.start(); } catch (e) { console.warn(e); voiceStop('<p class="heard"><i class=ic-alert></i>Le micro n\'a pas pu démarrer.</p>'); }
+}
+let speechQueue = Promise.resolve();
+$('#voiceBtn').onclick = voiceStart;
+
+/** Découpe en mots, en gardant l'écriture d'origine (accents, majuscules) */
+function tokenize(text) { return text.split(/[\s,;.!?]+/).map(raw => ({raw, n: norm(raw)})).filter(t => t.n); }
+/** Remplace les mots mal compris par leur correction (dictionnaire personnel) */
+function applyDict(toks) {
+  const entries = S.dict.map(d => ({h: norm(d.heard).split(' '), c: tokenize(d.correct)})).sort((a, b) => b.h.length - a.h.length);
+  const out = [];
+  for (let i = 0; i < toks.length;) {
+    const e = entries.find(en => en.h.every((w, k) => toks[i + k]?.n === w));
+    if (e) { out.push(...e.c.map(t => ({...t, fixed: true}))); i += e.h.length; } else out.push(toks[i++]);
+  }
+  return out;
+}
+function tagMatches(phrase, t) {
+  const n = norm(t.label); if (n === phrase) return true;
+  if (phrase.length >= 4 && soundKey(phrase) === soundKey(n)) return true;
+  const L = phrase.length; return lev(phrase, n) <= (L >= 8 ? 2 : L >= 5 ? 1 : 0);
+}
+function findTag(text) { const n = norm(text); return S.tags.find(t => norm(t.label) === n) || S.tags.find(t => tagMatches(n, t)) || null; }
+function analyse(text) {
+  const toks = applyDict(tokenize(text)), used = toks.map(() => false), found = [];
+  for (let len = 4; len >= 1; len--) for (let i = 0; i + len <= toks.length; i++) {
+    if (used.slice(i, i + len).some(Boolean)) continue;
+    const phrase = toks.slice(i, i + len).map(t => t.n).join(' ');
+    if (len === 1 && STOP.has(phrase)) continue;
+    const t = S.tags.find(x => tagMatches(phrase, x));
+    if (t) { found.push(t.id); for (let k = i; k < i + len; k++) used[k] = true; }
+  }
+  // Les mots restants (hors petits mots) sont regroupés : « Jean Baptiste » reste ensemble
+  const left = []; let grp = [];
+  toks.forEach((t, i) => {
+    if (used[i] || STOP.has(t.n)) { if (grp.length) left.push(grp), grp = []; }
+    else grp.push(t);
+  });
+  if (grp.length) left.push(grp);
+  return {text: toks.map(t => t.raw).join(' '), found: [...new Set(found)], left: left.map(g => g.map(t => t.raw).join(' '))};
+}
+async function handleSpeech(alts) {
+  const raw = alts[0].trim(), n = norm(raw), p = cur(); if (!p) return;
+  const vp = $('#voicePanel'); vp.hidden = false;
+  // Commandes simples
+  const m = raw.match(/^\s*(description|note|commentaire|remarque)\s*:?\s*(.*)$/i);
+  if (m) { p.description = (p.description ? p.description + '\n' : '') + cap(m[2]); $('#desc').value = p.description; await savePhoto(p); vp.innerHTML = `<p class="heard"><i class=ic-pen></i>Ajouté à la description : « ${esc(m[2])} »</p>`; return; }
+  // On garde l'interprétation qui reconnaît le plus d'étiquettes
+  const best = alts.map(a => ({a: a.trim(), k: analyse(a).found.length})).sort((x, y) => y.k - x.k)[0].a;
+  const lbls = ids => ids.map(id => `<b>${esc(S.tagById.get(id).label)}</b>`).join(', ');
+  const out = [], unk = [];
+  // La phrase est découpée en morceaux : étiquettes à coller, « enlève … », « suivante », etc. exécutés dans l'ordre
+  for (const part of splitCommands(best)) {
+    const q = cur(); if (!q) break;
+    if (part.type === 'next' || part.type === 'prev') {
+      const before = S.idx; await step(part.type === 'next' ? 1 : -1);
+      out.push(S.idx === before ? `<p class="muted">C'était déjà la ${part.type === 'next' ? 'dernière' : 'première'} photo.</p>`
+        : `<p><i class=ic-${part.type === 'next' ? 'chevron-right' : 'chevron-left'}></i>Photo ${S.idx + 1} sur ${S.list.length}</p>`);
+    } else if (part.type === 'stop') { voiceStop(); out.push('<p class="muted"><i class=ic-mic></i>Micro coupé.</p>'); }
+    else if (part.type === 'undo') { await doUndo(); out.push('<p><i class=ic-undo></i>Annulé.</p>'); }
+    else {
+      const res = analyse(part.text);
+      if (part.type === 'rm') {
+        const gone = res.found.filter(id => q.tags.includes(id));
+        for (const id of gone) await removeTag(id);
+        out.push(gone.length ? `<p><i class=ic-x></i>Enlevé : ${lbls(gone)}</p>` : `<p class="muted">« ${esc(part.text)} » n'est pas sur cette photo.</p>`);
+      } else {
+        const added = [];
+        for (const id of res.found) if (await addTag(id, q)) added.push(id);
+        const already = res.found.filter(id => !added.includes(id));
+        if (added.length) out.push(`<p><i class=ic-check></i>Ajouté : ${lbls(added)}</p>`);
+        if (already.length) out.push(`<p class="muted">Déjà présent : ${already.map(id => esc(S.tagById.get(id).label)).join(', ')}</p>`);
+        unk.push(...res.left.map(w => ({w, pid: q.id})));
+      }
+    }
+  }
+  if (!out.length && !unk.length) out.push('<p>Je n\'ai reconnu aucune étiquette.</p>');
+  const num = pid => { const i = S.list.indexOf(pid); return pid !== cur()?.id ? ` <span class="muted">(photo ${i + 1})</span>` : ''; };
+  vp.innerHTML = `<p class="heard">J'ai compris : « <b>${esc(best)}</b> »</p>${out.join('')}
+    ${unk.map((u, i) => `<div class="unk"><span><i class=ic-help></i>« <b>${esc(u.w)}</b> »${num(u.pid)} :</span>
+      ${ZONES.map(z => `<button class="btn small ok" data-new="${i}" data-zone="${z}"><i class=ic-plus></i>${esc(zoneName(z))}</button>`).join('')}
+      <button class="btn small" data-fix="${i}"><i class=ic-pen></i>Mal compris, corriger</button></div>`).join('')}`;
+  $$('[data-new]', vp).forEach(b => b.onclick = async () => {
+    const u = unk[+b.dataset.new], t = await createTag(cap(u.w), b.dataset.zone); reindex(); await addTag(t.id, S.byId.get(u.pid));
+    b.parentElement.innerHTML = `<i class=ic-check></i>« <b>${esc(t.label)}</b> » ajouté dans ${esc(zoneName(t.zone))}.`;
+  });
+  $$('[data-fix]', vp).forEach(b => b.onclick = async () => { const u = unk[+b.dataset.fix], msg = await fixWord(u.w, S.byId.get(u.pid)); if (msg) b.parentElement.innerHTML = msg; });
+}
+/** Mots de commande reconnus n'importe où dans la phrase */
+const CMDS = {suivante: 'next', suivant: 'next', precedente: 'prev', precedent: 'prev', stop: 'stop', arrete: 'stop', arreter: 'stop',
+  annuler: 'undo', annule: 'undo', enleve: 'rm', enlever: 'rm', enleves: 'rm', retire: 'rm', retirer: 'rm', supprime: 'rm', supprimer: 'rm'};
+function splitCommands(text) {
+  const parts = []; let seg = {rm: false, words: []};
+  const flush = () => { if (seg.words.length) parts.push({type: seg.rm ? 'rm' : 'add', text: seg.words.join(' ')}); seg = {rm: false, words: []}; };
+  for (const w of text.split(/[\s,;.!?]+/).filter(Boolean)) {
+    const c = S.tags.some(t => norm(t.label) === norm(w)) ? null : CMDS[norm(w)];   // une étiquette « Suivant » reste une étiquette
+    if (c === 'rm') { flush(); seg.rm = true; }
+    else if (c) { if (norm(seg.words.at(-1) || '') === 'photo') seg.words.pop(); flush(); parts.push({type: c}); }
+    else seg.words.push(w);
+  }
+  flush(); return parts;
+}
+/** « Mal compris » : on choisit le bon mot ; il est retenu pour la prochaine fois */
+async function fixWord(heard, photo = cur()) {
+  const n = norm(heard);
+  const close = [...S.tags].sort((a, b) => lev(n, norm(a.label)) - lev(n, norm(b.label))).slice(0, 6);
+  const v = await modal(`<h2><i class=ic-pen></i>Que vouliez-vous dire ?</h2><p>J'ai entendu « <b>${esc(heard)}</b> ».</p>
+    <div class="choices">${close.map(t => `<button class="btn big" data-v="t:${t.id}" style="justify-content:flex-start"><span class="tag" style="background:${colorOf(t)};min-height:2.2rem">${esc(t.label)}</span></button>`).join('')}</div>
+    <label class="lbl">…ou écrivez le bon mot :<input class="inp" id="fx" placeholder="Ex. : Kerguélen"></label>
+    <div class="row" id="fxz">${ZONES.map(z => `<button class="btn ok" data-v="z:${z}"><i class=ic-check></i>Ajouter dans « ${esc(zoneName(z))} »</button>`).join('')}</div>
+    <div class="row end"><button class="btn" data-v="no">Annuler</button></div>`, d => $('#fx', d).focus());
+  if (!v || v === 'no') return null;
+  let t;
+  if (v.startsWith('t:')) t = S.tagById.get(v.slice(2));
+  else { const w = $('#fx').value.trim(); if (!w) return null; t = await createTag(w, v.slice(2)); }
+  if (!t) return null;
+  if (norm(t.label) !== n) {
+    S.dict = S.dict.filter(d => norm(d.heard) !== n); S.dict.push({heard, correct: t.label}); await saveMeta('dict', S.dict);
+  }
+  reindex(); await addTag(t.id, photo);
+  return `<i class=ic-check></i>Retenu : la prochaine fois, « ${esc(heard)} » sera compris comme « <b>${esc(t.label)}</b> ».`;
+}
+
+/* =====================================================================
+   8. GALERIE, SAUVEGARDE, RÉGLAGES
+   ===================================================================== */
+function galList() {
+  const g = S.gal, q = norm(g.q);
+  return S.photos.filter(p => {
+    if (g.mode === 'trash' ? !p.trashed : p.trashed) return false;
+    if (g.mode === 'untagged' && p.tags.length) return false;
+    if (g.mode === 'tagged' && !p.tags.length) return false;
+    for (const t of g.tags) if (!p.tags.includes(t)) return false;
+    if (q) { const hay = norm([p.name, p.path, p.description, ...(p.baliseurs || []), ...p.tags.map(t => S.tagById.get(t)?.label)].join(' ')); if (!q.split(' ').every(w => hay.includes(w))) return false; }
+    return true;
+  }).sort(byPath);
+}
+let thumbObs;
+function renderGallery() {
+  $$('#galModes [data-mode]').forEach(b => b.setAttribute('aria-pressed', b.dataset.mode === S.gal.mode));
+  $('#galTags').innerHTML = S.tags.map(t => `<button class="tag ${S.gal.tags.has(t.id) ? 'on' : ''}" data-ft="${t.id}" style="background:${colorOf(t)}">${esc(t.label)}</button>`).join('');
+  const list = galList();
+  $('#galInfo').innerHTML = `<b>${list.length}</b> photo(s)` + (list.length ? ` <button class="btn small primary" id="galTagAll"><i class=ic-tag></i>Étiqueter ces photos une par une</button>` : '')
+    + (S.gal.mode === 'trash' && list.length ? ` <button class="btn small danger" id="emptyTrash">Vider la corbeille</button>` : '');
+  thumbObs?.disconnect();
+  thumbObs = new IntersectionObserver(es => es.forEach(async en => { if (en.isIntersecting) { thumbObs.unobserve(en.target); en.target.src = await imgURL(S.byId.get(en.target.dataset.id)); } }), {rootMargin: '300px'});
+  $('#galGrid').innerHTML = list.map(p => `<button class="card" data-open="${p.id}"><img data-id="${p.id}" alt="">
+    <span class="nm">${esc(p.name)}</span><span class="dots">${p.tags.slice(0, 4).map(id => S.tagById.get(id)).filter(Boolean).map(t => `<i style="background:${colorOf(t)}">${esc(t.label)}</i>`).join('')}${p.tags.length > 4 ? '<i style="background:#111">…</i>' : ''}</span>
+    ${p.trashed ? `<span class="hint">${esc(p.trashReason || '')}</span>` : ''}</button>`).join('') || '<p class="muted">Aucune photo ne correspond.</p>';
+  $$('#galGrid img').forEach(i => thumbObs.observe(i));
+  const ta = $('#galTagAll'); if (ta) ta.onclick = () => openTagList(list, 0);
+  const et = $('#emptyTrash'); if (et) et.onclick = emptyTrash;
+}
+function openTagList(list, idx) {
+  S.list = list.map(p => p.id); S.idx = idx; S.screen = 'tag';
+  $$('.screen').forEach(s => s.classList.toggle('active', s.id === 's-tag')); renderTag();
+}
+$('#galGrid').addEventListener('click', async e => {
+  const c = e.target.closest('[data-open]'); if (!c) return;
+  const p = S.byId.get(c.dataset.open);
+  if (p.trashed) {
+    const v = await modal(`<h2>Photo dans la corbeille</h2><p>« ${esc(p.name)} » — ${esc(p.trashReason || '')}</p>
+      <div class="row end"><button class="btn" data-v="no">Fermer</button><button class="btn big" data-v="see"><i class=ic-eye></i>Voir</button><button class="btn big ok" data-v="back"><i class=ic-undo></i>Remettre dans mes photos</button></div>`);
+    if (v === 'see') openViewer(p);
+    if (v === 'back') { p.trashed = false; delete p.trashReason; await savePhoto(p); S.dupPairs = null; renderGallery(); toast('Photo remise dans vos photos.'); }
+    return;
+  }
+  const list = galList(); openTagList(list, list.indexOf(p));
+});
+$('#galSearch').addEventListener('input', e => { S.gal.q = e.target.value; renderGallery(); });
+$('#galModes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) { S.gal.mode = b.dataset.mode; renderGallery(); } });
+$('#galTags').addEventListener('click', e => { const b = e.target.closest('[data-ft]'); if (!b) return; const id = b.dataset.ft; S.gal.tags.has(id) ? S.gal.tags.delete(id) : S.gal.tags.add(id); renderGallery(); });
+
+async function emptyTrash() {
+  const tr = S.photos.filter(p => p.trashed); if (!tr.length) return;
+  if (!(await confirmBox('Vider la corbeille ?', `${tr.length} photo(s) seront retirées de l'application <b>pour toujours</b>.<br>Les fichiers d'origine sur la carte SD / le disque ne sont <b>pas</b> touchés.`, '<i class=ic-trash></i>Vider', 'Non', true))) return;
+  for (const p of tr) {
+    await DB.del('photos', p.id);
+    if (!S.photos.some(o => o !== p && !tr.includes(o) && o.blobId === p.blobId)) { await DB.del('blobs', p.blobId); sigCache.delete(p.blobId); }
+  }
+  S.photos = S.photos.filter(p => !p.trashed); reindex(); S.dupPairs = null; refresh();
+  toast('Corbeille vidée.');
+}
+
+async function openBackup() {
+  const v = await modal(`<h2><i class=ic-save></i>Sauvegarder mon travail</h2>
+    <p>Vos étiquettes sont déjà enregistrées automatiquement dans ce navigateur. Pour plus de sécurité, gardez aussi une copie dans un fichier :</p>
+    <div class="choices">
+      <button class="btn big primary" data-v="json"><i class=ic-save></i>Enregistrer une sauvegarde (à garder précieusement)</button>
+      <button class="btn big" data-v="csv"><i class=ic-table></i>Tableau des photos et étiquettes (pour Excel / LibreOffice)</button>
+      <button class="btn big" data-v="restore"><i class=ic-upload></i>Reprendre une sauvegarde</button>
+    </div>
+    <p class="hint">La sauvegarde contient les étiquettes, descriptions et mots corrigés, pas les images elles-mêmes (les originaux restent sur vos disques).</p>
+    <div class="row end"><button class="btn" data-v="no">Fermer</button></div>`);
+  const day = new Date().toISOString().slice(0, 10);
+  if (v === 'json') download(`sauvegarde-photos-famille-${day}.json`, JSON.stringify(backupData(), null, 1), 'application/json');
+  if (v === 'csv') exportCsv();
+  if (v === 'restore') $('#inBackup').click();
+}
+/** Liste des photos et de leurs étiquettes (tableau pour Excel / LibreOffice), une colonne par zone */
+function exportCsv() {
+  const day = new Date().toISOString().slice(0, 10), q = s => '"' + String(s ?? '').replace(/"/g, '""') + '"';
+  const lbl = (p, f) => p.tags.map(id => S.tagById.get(id)).filter(t => t && f(t)).map(t => t.label).join(', ');
+  const rows = [['Fichier', 'Dossier', 'Date d\'origine', ...ZONES.map(zoneName), 'Autres étiquettes', 'Description', 'Baliseurs', 'Inscrit dans la photo', 'Copies', 'Corbeille'].map(q).join(';'),
+    ...[...S.photos].sort(byPath).map(p => [p.name, dirOf(p.path), fmtDate(p.originalDate || p.lastModified), ...ZONES.map(z => lbl(p, t => !t.foreign && t.zone === z)), lbl(p, t => t.foreign),
+      p.description, (p.baliseurs || []).join(', '), p.writtenAt && !isPending(p) ? 'oui' : '', (p.copies || []).join(' | '), p.trashed ? 'oui' : ''].map(q).join(';'))];
+  download(`etiquettes-photos-famille-${day}.csv`, '﻿' + rows.join('\r\n'), 'text/csv');
+}
+function backupData() {
+  return {app: 'mes-photos-de-famille', version: 2, date: new Date().toISOString(), settings: S.settings, dict: S.dict, tags: S.tags,
+    photos: S.photos.map(({hash, name, path, size, lastModified, originalDate, tags, description, baliseurs, trashed, copies}) => ({hash, name, path, size, lastModified, originalDate, tags, description, baliseurs, trashed, copies}))};
+}
+$('#inBackup').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text()); if (data.app !== 'mes-photos-de-famille') throw new Error('format');
+    const idMap = new Map();
+    for (const t of data.tags) { let ex = S.tags.find(x => norm(x.label) === norm(t.label)); if (!ex) { ex = {...t}; S.tags.push(ex); await saveTag(ex); } idMap.set(t.id, ex.id); }
+    for (const d of data.dict) if (!S.dict.some(x => norm(x.heard) === norm(d.heard))) S.dict.push(d);
+    await saveMeta('dict', S.dict);
+    reindex(); let n = 0;
+    for (const bp of data.photos) for (const p of S.byHash.get(bp.hash) || []) {
+      if (p.path !== bp.path && (S.byHash.get(bp.hash).some(o => o.path === bp.path))) continue;
+      p.tags = [...new Set([...p.tags, ...bp.tags.map(id => idMap.get(id)).filter(Boolean)])];
+      if (bp.description && !p.description.includes(bp.description)) p.description = (p.description ? p.description + '\n' : '') + bp.description;
+      await savePhoto(p); n++;
+    }
+    await modal(`<h2><i class=ic-check></i>Sauvegarde reprise</h2><p>${n} photo(s) ont retrouvé leurs étiquettes. Les photos pas encore ajoutées les retrouveront si vous reprenez la sauvegarde après les avoir ajoutées.</p>${okBtn()}`);
+    refresh();
+  } catch (err) { console.warn(err); await modal(`<h2>Fichier non reconnu</h2><p>Ce fichier n'est pas une sauvegarde de cette application.</p>${okBtn()}`); }
+};
+
+async function renderSettings() {
+  const est = await navigator.storage?.estimate?.().catch(() => null);
+  const trash = S.photos.filter(p => p.trashed).length;
+  const wm = S.settings.writeMode, L = live().filter(p => !p.demo);
+  const linked = L.filter(p => p.loc).length, pend = L.filter(isPending), errs = pend.filter(p => p.syncError && p.syncError !== 'perm');
+  const writeSec = `<section class="card2"><h2><i class=ic-pen></i>Étiquettes et photos d'origine</h2>
+      <label class="lbl">Vos initiales <span class="hint">(ajoutées automatiquement aux photos que vous étiquetez)</span><input class="inp" id="setIni" maxlength="8" value="${esc(S.settings.initials || '')}" placeholder="Ex. : MP" style="max-width:10rem;text-transform:uppercase"></label>
+      <div class="themes" style="margin-top:.8rem">
+        <button class="themecard" data-wm="files" aria-pressed="${wm === 'files'}" ${canFS() ? '' : 'disabled'}><b><i class=ic-pen></i> Inscrire dans mes photos</b><span class="hint">Étiquettes, description, initiales et date d'origine ajoutées à l'intérieur des fichiers. L'image n'est pas modifiée.${canFS() ? '' : ' <b>Nécessite Google Chrome ou Microsoft Edge.</b>'}</span></button>
+        <button class="themecard" data-wm="list" aria-pressed="${wm !== 'files'}"><b><i class=ic-lock></i> Ne jamais toucher à mes photos</b><span class="hint">Les étiquettes restent dans l'application. La liste se télécharge en tableau.</span></button>
+      </div>
+      ${wm === 'files' ? `<p>${linked} photo(s) reliée(s) à leur fichier · ${pend.length} en attente d'inscription${errs.length ? ` · <b>${errs.length} problème(s)</b>` : ''}</p>
+        ${errs.length ? `<ul class="hint">${errs.slice(0, 5).map(p => `<li>${esc(p.name)} : ${esc(p.syncError)}</li>`).join('')}</ul>` : ''}
+        <div class="row">${pend.length ? '<button class="btn ok" id="syncGo"><i class=ic-refresh></i>Inscrire maintenant</button>' : ''}
+          ${L.length > linked ? `<button class="btn" id="relinkBtn"><i class=ic-folder></i>Relier ${L.length - linked} photo(s) à leur dossier</button>` : ''}</div>` : ''}
+      <div class="row" style="margin-top:.5rem"><button class="btn" id="dlList"><i class=ic-table></i>Télécharger la liste des étiquettes</button></div></section>`;
+  $('#setMain').innerHTML = writeSec + `
+    <section class="card2"><h2><i class=ic-palette></i>Apparence</h2>
+      <div class="themes">
+        <button class="themecard" data-theme="elegant" aria-pressed="${S.settings.theme !== 'classic'}"><span class="pv" style="background:#f4f1eb">${PALETTES.elegant.slice(0, 4).map(c => `<i style="background:${c}"></i>`).join('')}</span><b>Élégant</b><span class="hint">Couleurs douces, papier ivoire. Recommandé.</span></button>
+        <button class="themecard" data-theme="classic" aria-pressed="${S.settings.theme === 'classic'}"><span class="pv" style="background:#fff;border:3px solid #111">${PALETTES.classic.slice(0, 4).map(c => `<i style="background:${c}"></i>`).join('')}</span><b>Contraste élevé</b><span class="hint">Traits épais et couleurs franches, pour une vue fatiguée.</span></button>
+      </div></section>
+    <section class="card2"><h2><i class=ic-type></i>Taille du texte</h2><div class="row"><button class="btn big" data-font="-1">A− Plus petit</button><button class="btn big" data-font="1">A+ Plus grand</button></div></section>
+    <section class="card2"><h2><i class=ic-layout></i>Noms des trois zones d'étiquettes</h2>
+      ${ZONES.map(z => `<label class="lbl">${{top: 'En haut', left: 'À gauche', right: 'À droite'}[z]}<input class="inp" data-zn="${z}" value="${esc(zoneName(z))}"></label>`).join('')}</section>
+    <section class="card2"><h2><i class=ic-book></i>Mots corrigés (dictionnaire personnel)</h2>
+      <p class="hint">Quand la voix comprend mal un nom ancien ou rare, la correction est retenue ici.</p>
+      <div id="dictList">${S.dict.map((d, i) => `<div class="dictrow"><span>« ${esc(d.heard)} » → <b>${esc(d.correct)}</b></span><button class="btn small danger" data-deldict="${i}">Retirer</button></div>`).join('') || '<p class="muted">Aucun mot corrigé pour l\'instant.</p>'}</div>
+      <div class="row" style="margin-top:.6rem"><input class="inp" id="dH" placeholder="Mot entendu (ex. : dupon)" style="flex:1"><input class="inp" id="dC" placeholder="Bon mot (ex. : Dupond)" style="flex:1"><button class="btn ok" id="dAdd"><i class=ic-plus></i>Ajouter</button></div></section>
+    <section class="card2"><h2><i class=ic-mic></i>Voix</h2><p>${!SR ? 'Ce navigateur ne propose pas la reconnaissance vocale (utilisez Chrome ou Edge).' : S.settings.voice === 'local' ? '<i class=ic-check></i>La voix est comprise sur cet ordinateur : rien n\'est envoyé sur internet.' : S.settings.voice === 'none' ? '<i class=ic-alert></i>Ce navigateur ne sait pas comprendre la voix sans internet. L\'application ne l\'envoie jamais en ligne : mettez Google Chrome à jour.' : 'Pas encore utilisée.'}</p>
+      <p class="hint">Sur l'écran des étiquettes : « Parler » (ou la barre d'espace), puis par exemple « mariage Dupond Rennes, suivante ». Dites « enlève Rennes » pour retirer une étiquette, « précédente », « annuler », « description … », et « stop » pour couper le micro.</p>
+      ${S.settings.voice ? '<button class="btn" id="voiceReset"><i class=ic-refresh></i>Vérifier à nouveau</button>' : ''}</section>
+    <section class="card2"><h2><i class=ic-trash></i>Corbeille</h2><p>${trash} photo(s) dans la corbeille.</p><div class="row"><button class="btn" id="seeTrash">Voir la corbeille</button>${trash ? '<button class="btn danger" id="setEmpty">Vider la corbeille</button>' : ''}</div></section>
+    <section class="card2"><h2><i class=ic-drive></i>Place utilisée</h2><p>${est ? `${fmtSize(est.usage || 0)} utilisés sur ${fmtSize(est.quota || 0)} disponibles pour ce navigateur.` : 'Inconnue.'}</p>
+      <p class="hint">Les données sont rangées dans ce navigateur, pour ce fichier. Ouvrez toujours l'application avec le même navigateur, depuis le même endroit.</p>
+      <button class="btn danger" id="wipe">Tout effacer et recommencer</button></section>`;
+  $('#setIni').onchange = e => { S.settings.initials = e.target.value.trim().toUpperCase(); saveMeta('settings', S.settings); toast('Initiales enregistrées.'); };
+  $$('[data-wm]').forEach(b => b.onclick = async () => {
+    if (b.dataset.wm === S.settings.writeMode) return;
+    if (b.dataset.wm === 'files' && !(await confirmBox('Inscrire les étiquettes dans vos photos ?', 'Les étiquettes, la description, vos initiales et la date d\'origine seront ajoutées <b>à l\'intérieur des fichiers photo</b>. L\'image elle-même n\'est pas modifiée.', 'Oui, inscrire', 'Non'))) return;
+    S.settings.writeMode = b.dataset.wm; await saveMeta('settings', S.settings); renderSettings(); scheduleSync(500);
+  });
+  $('#dlList').onclick = exportCsv;
+  const sg = $('#syncGo'); if (sg) sg.onclick = async () => { await syncNow(true); renderSettings(); };
+  const rl = $('#relinkBtn'); if (rl) rl.onclick = relink;
+  $$('[data-theme]').forEach(b => b.onclick = () => { S.settings.theme = b.dataset.theme; saveMeta('settings', S.settings); applyTheme(); renderSettings(); });
+  $$('[data-zn]').forEach(i => i.onchange = () => { if (i.value.trim()) { S.settings.zoneNames[i.dataset.zn] = i.value.trim(); saveMeta('settings', S.settings); toast('Enregistré.'); } });
+  $$('[data-deldict]').forEach(b => b.onclick = async () => { S.dict.splice(+b.dataset.deldict, 1); await saveMeta('dict', S.dict); renderSettings(); });
+  $('#dAdd').onclick = async () => { const h = $('#dH').value.trim(), c = $('#dC').value.trim(); if (!h || !c) return; S.dict.push({heard: h, correct: c}); await saveMeta('dict', S.dict); renderSettings(); };
+  const vr = $('#voiceReset'); if (vr) vr.onclick = () => { S.settings.voice = null; saveMeta('settings', S.settings); renderSettings(); };
+  $('#seeTrash').onclick = () => { S.gal.mode = 'trash'; go('gallery'); };
+  const se = $('#setEmpty'); if (se) se.onclick = emptyTrash;
+  $('#wipe').onclick = async () => {
+    if (!(await confirmBox('Tout effacer ?', 'Toutes les photos, étiquettes et réglages de l\'application seront effacés. Les fichiers d\'origine ne sont pas touchés.<br><b>Pensez à sauvegarder avant.</b>', 'Oui, tout effacer', 'Non', true))) return;
+    if (!(await confirmBox('Vraiment sûr ?', 'Cette action ne peut pas être annulée.', 'Oui, effacer', 'Non, annuler', true))) return;
+    for (const s of ['photos', 'blobs', 'tags', 'meta']) await DB.clear(s);
+    location.reload();
+  };
+}
+
+/** Redessine l'écran en cours après un changement */
+function refresh() {
+  reindex(); scheduleSync();
+  if (S.screen === 'tag') { S.list = S.list.filter(id => S.byId.has(id)); renderTag(); }
+  else ({home: renderHome, dups: renderDups, gallery: renderGallery, settings: renderSettings})[S.screen]?.();
+}
+
+/* =====================================================================
+   DÉMARRAGE
+   ===================================================================== */
+(async function init() {
+  try { await DB.open(); }
+  catch (e) {
+    document.body.innerHTML = `<main class="pad"><h1>Impossible d'enregistrer</h1><p>Ce navigateur bloque l'enregistrement (navigation privée ?). Ouvrez ce fichier avec <b>Google Chrome</b> ou <b>Microsoft Edge</b>, en fenêtre normale.</p></main>`;
+    return;
+  }
+  S.photos = await DB.all('photos');
+  S.tags = await DB.all('tags');
+  if (!(await DB.get('meta', 'init'))) {
+    S.tags = DEFAULT_TAGS.map(([label, zone, c], i) => ({id: uid(), label, zone, order: i, color: COLORS[c]}));
+    await DB.putMany('tags', S.tags); await saveMeta('init', true);
+  }
+  S.dict = (await DB.get('meta', 'dict'))?.value || [];
+  const st = (await DB.get('meta', 'settings'))?.value || {};
+  S.settings = {...DEFAULT_SETTINGS, ...st, zoneNames: {...DEFAULT_SETTINGS.zoneNames, ...(st.zoneNames || {})}};
+  S.ignored = new Set((await DB.get('meta', 'ignored'))?.value || []);
+  S.roots = (await DB.get('meta', 'roots'))?.value || [];
+  for (const p of S.photos) if (p.knownSig === undefined) p.knownSig = contentSig(p);
+  reindex(); applyTheme(); applyFont(); go('home');
+  if (!S.settings.writeMode) await welcome();
+  scheduleSync(1000);
+})();
+
+/** Premier lancement : initiales + choix « inscrire dans les photos » ou « ne jamais y toucher » */
+async function welcome() {
+  const fs = canFS();
+  const card = (v, ic, title, text) => `<button class="btn big choice" data-v="${v}"><i class=ic-${ic}></i><span><b>${title}</b><span class="hint">${text}</span></span></button>`;
+  const v = await modal(`<h2><i class=ic-sparkle></i>Bienvenue</h2>
+    <p>Deux questions avant de commencer. Vous pourrez changer d'avis à tout moment dans les Réglages.</p>
+    <label class="lbl">1. Vos initiales <span class="hint">— ajoutées aux photos que vous étiquetez, pour savoir qui a fait le travail</span>
+      <input class="inp" id="ob-ini" maxlength="8" placeholder="Ex. : MP" value="${esc(S.settings.initials || '')}" style="max-width:10rem;text-transform:uppercase"></label>
+    <div class="lbl">2. Que faire des étiquettes ?</div>
+    <div class="choices">
+      ${fs ? card('files', 'pen', 'Les inscrire dans mes photos', 'Les étiquettes, la description et vos initiales sont ajoutées à l\'intérieur de chaque fichier photo. L\'image elle-même n\'est pas modifiée, et sa date d\'origine est conservée dans la photo. Les étiquettes se retrouvent dans d\'autres logiciels (Explorateur Windows…).') : ''}
+      ${card('list', 'lock', 'Ne jamais toucher à mes photos', 'Les étiquettes restent dans l\'application. Vous pouvez en télécharger la liste (tableau) à tout moment.')}
+    </div>
+    ${fs ? '' : '<p class="hint"><i class=ic-alert></i>Pour inscrire les étiquettes dans les photos, il faut ouvrir l\'application avec Google Chrome ou Microsoft Edge.</p>'}`,
+    d => $('#ob-ini', d).focus());
+  S.settings.initials = ($('#ob-ini')?.value || '').trim().toUpperCase();
+  if (v === 'files' || v === 'list') S.settings.writeMode = v;
+  await saveMeta('settings', S.settings);
+  if (S.screen === 'settings') renderSettings();
+}
+</script>
+</body>
+</html>
