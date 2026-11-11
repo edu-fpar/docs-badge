@@ -448,6 +448,7 @@ section.card2 h2 [class^="ic-"]{color:var(--accent)}
 .btn.choice .hint{font-weight:400}
 .btn.choice>[class^="ic-"]{margin-top:.15rem}
 .themecard[disabled]{opacity:.55;cursor:not-allowed}
+#desc.dictating{min-height:9em;outline:3px solid var(--accent,var(--focus));outline-offset:2px;box-shadow:0 0 0 7px color-mix(in srgb,var(--accent,var(--focus)) 18%,transparent);transition:box-shadow .2s}
 </style>
 </head>
 <body>
@@ -1944,7 +1945,9 @@ applied.addEventListener('pointercancel', endSwipe);
 /* ---- Navigation, saisie au clavier, description ---- */
 async function step(n) {
   const i = S.idx + n; if (i < 0 || i >= S.list.length) return;
-  await flushDesc(); S.idx = i; renderTag();
+  await flushDesc(); S.idx = i;
+  if (voiceTarget === 'desc') setVoiceTarget('tags');   // nouvelle photo : on repart sur les étiquettes
+  renderTag();
   syncNow();   // on inscrit tout de suite la photo qu'on vient de quitter
 }
 $('#prevBtn').onclick = () => step(-1);
@@ -2035,7 +2038,63 @@ async function voiceMode() {
 const canForceLocal = () => !!SR && 'processLocally' in SR.prototype;
 function setListening(on) {
   listening = on; const b = $('#voiceBtn');
-  b.classList.toggle('listening', on); b.innerHTML = on ? '<i class=ic-stop></i>J\'écoute… (couper)' : '<i class=ic-mic></i>Parler';
+  b.classList.toggle('listening', on);
+  b.innerHTML = !on ? '<i class=ic-mic></i>Parler' : voiceTarget === 'desc' ? '<i class=ic-stop></i>Dictée de la description… (couper)' : '<i class=ic-stop></i>J\'écoute… (couper)';
+}
+/* Où va la voix : « tags » (étiquettes, par défaut) ou « desc » (dictée libre de la description).
+   « description » fait passer en dictée, « étiquettes » (dit seul) fait revenir. */
+let voiceTarget = 'tags', descHistory = [];
+function setVoiceTarget(t) {
+  voiceTarget = t; descHistory = [];
+  $('#desc').classList.toggle('dictating', t === 'desc');
+  setListening(listening);
+  if (t === 'desc') $('#desc').scrollIntoView({block: 'center', behavior: 'smooth'});
+}
+/* ---- Dictée : ponctuation à la voix + dictionnaire personnel ---- */
+const W = s => new RegExp('(?<![\\p{L}\\p{N}])' + s + '(?![\\p{L}\\p{N}])', 'giu');
+const SPOKEN = [
+  ['(?:à la ligne|retour à la ligne|nouvelle ligne|nouveau paragraphe)', '\n'], ["point d'interrogation", ' ?'], ["point d'exclamation", ' !'],
+  ['points de suspension', '…'], ['point[- ]virgule', ' ;'], ['deux[- ]points', ' :'], ['ouvre(?:z)? (?:la )?parenthèse', ' ('],
+  ['ferme(?:z)? (?:la )?parenthèse', ')'], ['ouvre(?:z)? (?:les )?guillemets', ' « '], ['ferme(?:z)? (?:les )?guillemets', ' »'],
+  ['virgule', ','], ['point', '.'],
+].map(([s, r]) => [W(s), r]);
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function formatDictation(raw) {
+  let s = ' ' + raw.trim() + ' ';
+  for (const d of S.dict) s = s.replace(W(reEsc(d.heard.trim())), d.correct);
+  for (const [re, r] of SPOKEN) s = s.replace(re, r);
+  return s.replace(/[ \t]+([,.…)])/g, '$1').replace(/\( +/g, '(').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/^ +| +$/g, '')
+    .replace(/([.?!…]\s+|\n)(\p{Ll})/gu, (m, a, b) => a + b.toUpperCase());
+}
+/** Ajoute un morceau dicté à la description, avec majuscules et espaces corrects */
+function joinDesc(prev, piece) {
+  if (!piece) return prev;
+  if (!prev.trim()) return cap(piece.replace(/^\n+/, ''));
+  if (piece.startsWith('\n')) return prev.replace(/[ \t]+$/, '') + piece.replace(/^\n+(\p{Ll})/u, (m, b) => '\n' + b.toUpperCase());
+  if (/^[,.…)]/.test(piece)) return prev.replace(/\s+$/, '') + piece;
+  if (/\n$/.test(prev)) return prev + cap(piece.trim());
+  return prev.replace(/\s+$/, '') + ' ' + (/[.?!…]$/.test(prev.trim()) ? cap(piece.trim()) : piece.trim());
+}
+const DICT_CMDS = {etiquette: 'tags', etiquettes: 'tags', 'mode etiquettes': 'tags', 'retour aux etiquettes': 'tags', 'fin de la description': 'tags',
+  suivante: 'next', suivant: 'next', 'photo suivante': 'next', precedente: 'prev', 'photo precedente': 'prev',
+  stop: 'stop', 'arrete': 'stop', annuler: 'undo', annule: 'undo', efface: 'undo', effacer: 'undo'};
+async function dictate(raw, p) {
+  const vp = $('#voicePanel'); vp.hidden = false;
+  const c = DICT_CMDS[norm(raw)];   // une commande n'est reconnue que dite SEULE (sinon c'est du texte)
+  if (c === 'tags') { setVoiceTarget('tags'); vp.innerHTML = `<p class="heard"><i class=ic-tag></i>Retour aux étiquettes. Dites les noms, puis « suivante ».</p>`; return; }
+  if (c === 'next' || c === 'prev') { await step(c === 'next' ? 1 : -1); vp.innerHTML = `<p class="heard"><i class=ic-${c === 'next' ? 'chevron-right' : 'chevron-left'}></i>Photo ${S.idx + 1} sur ${S.list.length} — retour aux étiquettes.</p>`; return; }
+  if (c === 'stop') { voiceStop('<p class="heard muted"><i class=ic-mic></i>Micro coupé.</p>'); return; }
+  if (c === 'undo') {
+    if (!descHistory.length) { vp.innerHTML = '<p class="heard muted">Rien à retirer.</p>'; return; }
+    p.description = descHistory.pop(); $('#desc').value = p.description; await savePhoto(p);
+    vp.innerHTML = '<p class="heard"><i class=ic-undo></i>Dernière phrase retirée.</p>'; return;
+  }
+  await flushDesc();   // garde ce qui a pu être tapé au clavier entre-temps
+  const piece = formatDictation(raw); if (!piece.trim()) return;
+  descHistory.push(p.description || '');
+  p.description = joinDesc(p.description || '', piece); $('#desc').value = p.description; $('#desc').scrollTop = 1e9; await savePhoto(p);
+  vp.innerHTML = `<p class="heard"><i class=ic-pen></i>Ajouté : « ${esc(piece.trim())} »</p>
+    <p class="hint">Continuez à dicter. Dites seulement « <b>étiquettes</b> » pour revenir aux étiquettes, « <b>annuler</b> » pour retirer la dernière phrase.</p>`;
 }
 /* Mode « mains libres » : un seul clic, le micro reste ouvert ; on enchaîne
    « Dupond Rennes, suivante… ». Coupé par « stop », un clic, la barre d'espace,
@@ -2045,6 +2104,7 @@ const IDLE_MS = 3 * 60e3;
 function showVoice(html) { const vp = $('#voicePanel'); vp.hidden = false; vp.innerHTML = html; }
 function voiceStop(html) {
   wantListen = false; clearTimeout(idleTimer);
+  if (voiceTarget === 'desc') setVoiceTarget('tags');
   try { rec?.abort(); } catch {}
   setListening(false);
   if (html) showVoice(html);
@@ -2066,7 +2126,7 @@ function listenOnce() {
   if (!wantListen) return;
   rec = new SR(); rec.lang = 'fr-FR'; rec.interimResults = true; rec.maxAlternatives = 3; rec.continuous = true;
   rec.processLocally = true;   // obligatoire : la voix reste sur l'ordinateur
-  try { if (window.SpeechRecognitionPhrase) rec.phrases = [...S.tags.map(t => t.label), ...S.dict.map(d => d.correct), 'suivante', 'précédente', 'enlève', 'stop'].map(w => new SpeechRecognitionPhrase(w, 4)); } catch {}
+  try { if (window.SpeechRecognitionPhrase) rec.phrases = [...S.tags.map(t => t.label), ...S.dict.map(d => d.correct), 'suivante', 'précédente', 'enlève', 'stop', 'description', 'étiquettes', 'virgule', 'à la ligne'].map(w => new SpeechRecognitionPhrase(w, 4)); } catch {}
   rec.onstart = () => setListening(true);
   rec.onresult = e => {
     restarts = 0; bumpIdle();
@@ -2137,9 +2197,17 @@ function analyse(text) {
 async function handleSpeech(alts) {
   const raw = alts[0].trim(), n = norm(raw), p = cur(); if (!p) return;
   const vp = $('#voicePanel'); vp.hidden = false;
-  // Commandes simples
-  const m = raw.match(/^\s*(description|note|commentaire|remarque)\s*:?\s*(.*)$/i);
-  if (m) { p.description = (p.description ? p.description + '\n' : '') + cap(m[2]); $('#desc').value = p.description; await savePhoto(p); vp.innerHTML = `<p class="heard"><i class=ic-pen></i>Ajouté à la description : « ${esc(m[2])} »</p>`; return; }
+  if (voiceTarget === 'desc') return dictate(raw, p);
+  // « description … » : passage en dictée libre (la suite de la phrase est gardée)
+  const m = raw.match(/^\s*(description|note|commentaire|remarque)(?![\p{L}])\s*:?\s*(.*)$/iu);
+  if (m) {
+    setVoiceTarget('desc');
+    vp.innerHTML = `<p class="heard"><i class=ic-pen></i>Dictée de la description : parlez librement.</p>
+      <p class="hint">Dites « virgule », « point », « à la ligne » pour la ponctuation. Dites seulement « <b>étiquettes</b> » pour revenir.</p>`;
+    if (m[2].trim()) await dictate(m[2], p);
+    return;
+  }
+  if (/^(mode )?etiquettes?$/.test(n)) { vp.innerHTML = '<p class="heard muted"><i class=ic-tag></i>Vous êtes déjà sur les étiquettes. Dites « description » pour dicter un texte libre.</p>'; return; }
   // On garde l'interprétation qui reconnaît le plus d'étiquettes
   const best = alts.map(a => ({a: a.trim(), k: analyse(a).found.length})).sort((x, y) => y.k - x.k)[0].a;
   const lbls = ids => ids.map(id => `<b>${esc(S.tagById.get(id).label)}</b>`).join(', ');
@@ -2355,7 +2423,8 @@ async function renderSettings() {
       <div id="dictList">${S.dict.map((d, i) => `<div class="dictrow"><span>« ${esc(d.heard)} » → <b>${esc(d.correct)}</b></span><button class="btn small danger" data-deldict="${i}">Retirer</button></div>`).join('') || '<p class="muted">Aucun mot corrigé pour l\'instant.</p>'}</div>
       <div class="row" style="margin-top:.6rem"><input class="inp" id="dH" placeholder="Mot entendu (ex. : dupon)" style="flex:1"><input class="inp" id="dC" placeholder="Bon mot (ex. : Dupond)" style="flex:1"><button class="btn ok" id="dAdd"><i class=ic-plus></i>Ajouter</button></div></section>
     <section class="card2"><h2><i class=ic-mic></i>Voix</h2><p>${!SR ? 'Ce navigateur ne propose pas la reconnaissance vocale (utilisez Chrome ou Edge).' : S.settings.voice === 'local' ? '<i class=ic-check></i>La voix est comprise sur cet ordinateur : rien n\'est envoyé sur internet.' : S.settings.voice === 'none' ? '<i class=ic-alert></i>Ce navigateur ne sait pas comprendre la voix sans internet. L\'application ne l\'envoie jamais en ligne : mettez Google Chrome à jour.' : 'Pas encore utilisée.'}</p>
-      <p class="hint">Sur l'écran des étiquettes : « Parler » (ou la barre d'espace), puis par exemple « mariage Dupond Rennes, suivante ». Dites « enlève Rennes » pour retirer une étiquette, « précédente », « annuler », « description … », et « stop » pour couper le micro.</p>
+      <p class="hint">Sur l'écran des étiquettes : « Parler » (ou la barre d'espace), puis par exemple « mariage Dupond Rennes, suivante ». Dites « enlève Rennes » pour retirer une étiquette, « précédente », « annuler », et « stop » pour couper le micro.</p>
+      <p class="hint"><b>Description à la voix</b> : dites « description », puis parlez librement (« virgule », « point », « à la ligne » pour la ponctuation). Dites seulement « étiquettes » pour revenir ; « annuler » retire la dernière phrase dictée. En changeant de photo, on revient aux étiquettes.</p>
       ${S.settings.voice ? '<button class="btn" id="voiceReset"><i class=ic-refresh></i>Vérifier à nouveau</button>' : ''}</section>
     <section class="card2"><h2><i class=ic-trash></i>Corbeille</h2><p>${trash} photo(s) dans la corbeille.</p><div class="row"><button class="btn" id="seeTrash">Voir la corbeille</button>${trash ? '<button class="btn danger" id="setEmpty">Vider la corbeille</button>' : ''}</div></section>
     <section class="card2"><h2><i class=ic-drive></i>Place utilisée</h2><p>${est ? `${fmtSize(est.usage || 0)} utilisés sur ${fmtSize(est.quota || 0)} disponibles pour ce navigateur.` : 'Inconnue.'}</p>
